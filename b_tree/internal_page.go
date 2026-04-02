@@ -187,3 +187,49 @@ func (node *InternalPage) Vacuum() {
 
 	copy(node.data, tmp.data)
 }
+
+func (node *InternalPage) Split(newPage *InternalPage) []byte {
+	cellCount := node.CellCount()
+	midIndex := cellCount / 2
+
+	// Extract median cell to promote
+	midCell := node.GetCell(node.GetCellOffset(midIndex))
+	promotedKey := make([]byte, len(midCell.Key))
+	copy(promotedKey, midCell.Key)
+
+	// Move upper half (excluding median) to the new right page
+	for i := midIndex + 1; i < cellCount; i++ {
+		cell := node.GetCell(node.GetCellOffset(i))
+		newPage.Insert(cell.Key, cell.ChildPointer)
+	}
+
+	// Rightmost pointer shifts to the new right page
+	newPage.SetRightmostPointer(node.RightmostPointer())
+
+	// Left node's new rightmost pointer is the median key's left child
+	node.SetRightmostPointer(midCell.ChildPointer)
+
+	// Truncate the left node using a temporary page buffer
+	pageSize := uint32(len(node.data))
+	tmp := NewInternalPage(pageSize)
+	tmp.SetRightmostPointer(node.RightmostPointer())
+	tmp.SetCellCount(midIndex)
+
+	for i := uint16(0); i < midIndex; i++ {
+		oldOffset := node.GetCellOffset(i)
+		cell := node.GetCell(oldOffset)
+
+		cellSize := uint16(InternalCellHeaderSize + len(cell.Key))
+		newFreeSpace := tmp.FreeSpacePointer() - cellSize
+
+		tmp.SetFreeSpacePointer(newFreeSpace)
+		tmp.WriteCell(newFreeSpace, cell.Key, cell.ChildPointer)
+
+		newSlotPos := InternalHeaderSize + (i * SlotSize)
+		binary.LittleEndian.PutUint16(tmp.data[newSlotPos:], newFreeSpace)
+	}
+
+	copy(node.data, tmp.data)
+
+	return promotedKey
+}

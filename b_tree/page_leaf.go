@@ -233,3 +233,46 @@ func (node *LeafPage) Vacuum() {
 	// 4. Overwrite the current page's underlying byte array with the defragmented one
 	copy(node.data, tmp.data)
 }
+
+func (node *LeafPage) Split(newPage *LeafPage, newPageID uint64) []byte {
+	cellCount := node.CellCount()
+	midIndex := cellCount / 2
+
+	var splitKey []byte
+
+	for i := midIndex; i < cellCount; i++ {
+		cell := node.GetCell(node.GetCellOffset(i))
+		if i == midIndex {
+			splitKey = make([]byte, len(cell.Key))
+			copy(splitKey, cell.Key)
+		}
+
+		newPage.Insert(cell.Key, cell.Value)
+	}
+
+	newPage.SetRightSibling(node.RightSibling())
+	node.SetRightSibling(newPageID)
+
+	pageSize := uint32(len(node.data))
+	tmp := NewLeafPage(pageSize)
+	tmp.SetRightSibling(node.RightSibling())
+	tmp.SetCellCount(midIndex)
+
+	for i := uint16(0); i < midIndex; i++ {
+		oldOffset := node.GetCellOffset(i)
+		cell := node.GetCell(oldOffset)
+
+		cellSize := uint16(CellHeaderSize + len(cell.Key) + len(cell.Value))
+		newFreeSpace := tmp.FreeSpacePointer() - cellSize
+
+		tmp.SetFreeSpacePointer(newFreeSpace)
+		tmp.WriteCell(newFreeSpace, cell.Key, cell.Value)
+
+		newSlotPos := LeafHeaderSize + (i * SlotSize)
+		binary.LittleEndian.PutUint16(tmp.data[newSlotPos:], newFreeSpace)
+	}
+
+	copy(node.data, tmp.data)
+
+	return splitKey
+}

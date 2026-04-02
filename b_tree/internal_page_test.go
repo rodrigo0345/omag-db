@@ -147,3 +147,72 @@ func TestInternalPage_Vacuum(t *testing.T) {
 		t.Errorf("expected cell 1 key 'key2', got '%s'", cell1.Key)
 	}
 }
+
+// Validates median key promotion and RightmostPointer shifts for Internal Nodes.
+func TestInternalPage_Split(t *testing.T) {
+	pageSize := uint32(4096)
+	page := NewInternalPage(pageSize)
+	page.SetRightmostPointer(99)
+
+	keys := []string{"A", "B", "C", "D", "E", "F"}
+	// Insert keys with sequential child pointers 1 through 6
+	for i, k := range keys {
+		err := page.Insert([]byte(k), uint64(i+1))
+		if err != nil {
+			t.Fatalf("failed to insert %s: %v", k, err)
+		}
+	}
+
+	newPage := NewInternalPage(pageSize)
+
+	// InternalPage.Split takes 1 argument and returns the promoted key
+	promotedKey := page.Split(newPage)
+
+	// Total 6 cells. Mid index is 3 (Key "D", Child 4).
+	if string(promotedKey) != "D" {
+		t.Fatalf("expected promoted key 'D', got '%s'", promotedKey)
+	}
+
+	// Left page retains cells 0, 1, 2 ("A", "B", "C")
+	if page.CellCount() != 3 {
+		t.Fatalf("expected left page 3 cells, got %d", page.CellCount())
+	}
+	// Right page receives cells 4, 5 ("E", "F")
+	if newPage.CellCount() != 2 {
+		t.Fatalf("expected right page 2 cells, got %d", newPage.CellCount())
+	}
+
+	// Left node's new rightmost pointer becomes the left child of the promoted key (Child 4)
+	if page.RightmostPointer() != 4 {
+		t.Fatalf("expected left rightmost pointer 4, got %d", page.RightmostPointer())
+	}
+
+	// Right node's new rightmost pointer inherits the original rightmost pointer (99)
+	if newPage.RightmostPointer() != 99 {
+		t.Fatalf("expected right rightmost pointer 99, got %d", newPage.RightmostPointer())
+	}
+
+	expectedLeftKeys := []string{"A", "B", "C"}
+	expectedLeftPtrs := []uint64{1, 2, 3}
+	for i := uint16(0); i < page.CellCount(); i++ {
+		cell := page.GetCell(page.GetCellOffset(i))
+		if string(cell.Key) != expectedLeftKeys[i] {
+			t.Errorf("left page cell %d: expected %s, got %s", i, expectedLeftKeys[i], cell.Key)
+		}
+		if cell.ChildPointer != expectedLeftPtrs[i] {
+			t.Errorf("left page cell %d: expected ptr %d, got %d", i, expectedLeftPtrs[i], cell.ChildPointer)
+		}
+	}
+
+	expectedRightKeys := []string{"E", "F"}
+	expectedRightPtrs := []uint64{5, 6}
+	for i := uint16(0); i < newPage.CellCount(); i++ {
+		cell := newPage.GetCell(newPage.GetCellOffset(i))
+		if string(cell.Key) != expectedRightKeys[i] {
+			t.Errorf("right page cell %d: expected %s, got %s", i, expectedRightKeys[i], cell.Key)
+		}
+		if cell.ChildPointer != expectedRightPtrs[i] {
+			t.Errorf("right page cell %d: expected ptr %d, got %d", i, expectedRightPtrs[i], cell.ChildPointer)
+		}
+	}
+}

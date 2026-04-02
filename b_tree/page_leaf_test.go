@@ -3,6 +3,7 @@ package btree
 import (
 	"encoding/binary"
 	"testing"
+	"fmt"
 )
 
 func TestLeafPage_Initialization(t *testing.T) {
@@ -337,5 +338,77 @@ func TestLeafPage_GetAfterRemove(t *testing.T) {
 	}
 	if string(val) != "trick" {
 		t.Fatalf("expected 'trick', got '%s'", val)
+	}
+}
+
+func TestLeafPage_Split(t *testing.T) {
+	pageSize := uint32(4096)
+	page := NewLeafPage(pageSize)
+	page.SetRightSibling(99)
+
+	keys := []string{"A", "B", "C", "D", "E", "F"}
+	for _, k := range keys {
+		err := page.Insert([]byte(k), []byte(k+"_val"))
+		if err != nil {
+			t.Fatalf("failed to insert %s: %v", k, err)
+		}
+	}
+
+	newPage := NewLeafPage(pageSize)
+	newPageID := uint64(2)
+
+	splitKey := page.Split(newPage, newPageID)
+
+	if string(splitKey) != "D" {
+		t.Fatalf("expected split key 'D', got '%s'", splitKey)
+	}
+
+	if page.CellCount() != 3 {
+		t.Fatalf("expected left page 3 cells, got %d", page.CellCount())
+	}
+	if newPage.CellCount() != 3 {
+		t.Fatalf("expected right page 3 cells, got %d", newPage.CellCount())
+	}
+
+	expectedLeft := []string{"A", "B", "C"}
+	for i := uint16(0); i < page.CellCount(); i++ {
+		cell := page.GetCell(page.GetCellOffset(i))
+		if string(cell.Key) != expectedLeft[i] {
+			t.Errorf("left page cell %d: expected %s, got %s", i, expectedLeft[i], cell.Key)
+		}
+	}
+
+	expectedRight := []string{"D", "E", "F"}
+	for i := uint16(0); i < newPage.CellCount(); i++ {
+		cell := newPage.GetCell(newPage.GetCellOffset(i))
+		if string(cell.Key) != expectedRight[i] {
+			t.Errorf("right page cell %d: expected %s, got %s", i, expectedRight[i], cell.Key)
+		}
+	}
+
+	if page.RightSibling() != newPageID {
+		t.Fatalf("expected left sibling %d, got %d", newPageID, page.RightSibling())
+	}
+	if newPage.RightSibling() != 99 {
+		t.Fatalf("expected right sibling 99, got %d", newPage.RightSibling())
+	}
+}
+
+func BenchmarkLeafPage_Split(b *testing.B) {
+	pageSize := uint32(4096)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		page := NewLeafPage(pageSize)
+		for j := 0; j < 100; j++ {
+			key := []byte(fmt.Sprintf("key_%04d", j))
+			val := []byte(fmt.Sprintf("val_%04d", j))
+			page.Insert(key, val)
+		}
+		newPage := NewLeafPage(pageSize)
+		b.StartTimer()
+
+		page.Split(newPage, uint64(i+1))
 	}
 }
