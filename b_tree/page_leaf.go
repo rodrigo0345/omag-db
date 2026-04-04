@@ -7,102 +7,22 @@ import (
 	"sort"
 )
 
+const (
+	LeafHeaderTypeOffset      = 0  // 2 bytes (PageType)
+	LeafHeaderCellsOffset     = 2  // 2 bytes (Cell Count)
+	LeafHeaderFreeSpaceOffset = 4  // 2 bytes (Free Space Pointer)
+	LeafHeaderSiblingOffset   = 6  // 8 bytes (Right Sibling Page ID)
+	LeafHeaderSize            = 14 // Total header size for leaf pages
+)
+
 type LeafPage struct {
 	data []byte
 }
 
-func NewLeafPage(pageSize uint32) *LeafPage {
-	p := &LeafPage{
-		data: make([]byte, pageSize),
-	}
-
-	p.SetPageType(TypeLeaf)
-	p.SetCellCount(0)
-
-	// Free space must start at the dynamic page size, not the hardcoded default!
-	p.SetFreeSpacePointer(uint16(pageSize))
-	p.SetRightSibling(0)
-
-	return p
-}
-
-func (node *LeafPage) GetCellOffset(cellIndex uint16) uint16 {
-	slotOffset := LeafHeaderSize + (cellIndex * SlotSize)
-	return binary.LittleEndian.Uint16(node.data[slotOffset:])
-}
-
-func (node *LeafPage) PageType() PageType {
-	return PageType(binary.LittleEndian.Uint16(node.data[LeafHeaderTypeOffset:]))
-}
-
-func (node *LeafPage) CellCount() uint16 {
-	return binary.LittleEndian.Uint16(node.data[LeafHeaderCellsOffset:])
-}
-
-func (node *LeafPage) FreeSpacePointer() uint16 {
-	return binary.LittleEndian.Uint16(node.data[LeafHeaderFreeSpaceOffset:])
-}
-
-func (node *LeafPage) RightSibling() uint64 {
-	return binary.LittleEndian.Uint64(node.data[LeafHeaderSiblingOffset:])
-}
-
-func (node *LeafPage) SetPageType(pageType PageType) {
-	binary.LittleEndian.PutUint16(node.data[LeafHeaderTypeOffset:], uint16(pageType))
-}
-
-func (node *LeafPage) SetCellCount(count uint16) {
-	binary.LittleEndian.PutUint16(node.data[LeafHeaderCellsOffset:], count)
-}
-
-func (node *LeafPage) SetFreeSpacePointer(pointer uint16) {
-	binary.LittleEndian.PutUint16(node.data[LeafHeaderFreeSpaceOffset:], pointer)
-}
-
-func (node *LeafPage) SetRightSibling(siblingID uint64) {
-	binary.LittleEndian.PutUint64(node.data[LeafHeaderSiblingOffset:], siblingID)
-}
-
-// pointers to the key and value, no copy used
 type Cell struct {
 	Key   []byte
 	Value []byte
 }
-
-func (node *LeafPage) GetCell(offset uint16) Cell {
-	offset32 := uint32(offset)
-
-	keyLen := uint32(binary.LittleEndian.Uint16(node.data[offset32 : offset32+2]))
-	valLen := binary.LittleEndian.Uint32(node.data[offset32+2 : offset32+6])
-
-	keyStart := offset32 + CellHeaderSize
-	valStart := keyStart + keyLen
-
-	return Cell{
-		Key:   node.data[keyStart : keyStart+keyLen],
-		Value: node.data[valStart : valStart+valLen],
-	}
-}
-
-func (node *LeafPage) WriteCell(offset uint16, key []byte, value []byte) uint16 {
-	offset32 := uint32(offset)
-	keyLen := uint32(len(key))
-	valLen := uint32(len(value))
-
-	binary.LittleEndian.PutUint16(node.data[offset32:offset32+2], uint16(keyLen))
-	binary.LittleEndian.PutUint32(node.data[offset32+2:offset32+6], valLen)
-
-	keyStart := offset32 + CellHeaderSize
-	copy(node.data[keyStart:], key)
-
-	valStart := keyStart + keyLen
-	copy(node.data[valStart:], value)
-
-	return uint16(CellHeaderSize + keyLen + valLen)
-}
-
-var ErrPageFull = errors.New("page is full")
-var ErrKeyNotFound = errors.New("key not found")
 
 // insert a key-value pair to the leaf page.
 // keeps the slot array sorted by key.
@@ -276,3 +196,90 @@ func (node *LeafPage) Split(newPage *LeafPage, newPageID uint64) []byte {
 
 	return splitKey
 }
+
+func NewLeafPage(pageSize uint32) *LeafPage {
+	p := &LeafPage{
+		data: make([]byte, pageSize),
+	}
+
+	p.SetPageType(TypeLeaf)
+	p.SetCellCount(0)
+
+	// Free space must start at the dynamic page size, not the hardcoded default!
+	p.SetFreeSpacePointer(uint16(pageSize))
+	p.SetRightSibling(0)
+
+	return p
+}
+
+func (node *LeafPage) GetCellOffset(cellIndex uint16) uint16 {
+	slotOffset := LeafHeaderSize + (cellIndex * SlotSize)
+	return binary.LittleEndian.Uint16(node.data[slotOffset:])
+}
+
+func (node *LeafPage) PageType() PageType {
+	return PageType(binary.LittleEndian.Uint16(node.data[LeafHeaderTypeOffset:]))
+}
+
+func (node *LeafPage) CellCount() uint16 {
+	return binary.LittleEndian.Uint16(node.data[LeafHeaderCellsOffset:])
+}
+
+func (node *LeafPage) FreeSpacePointer() uint16 {
+	return binary.LittleEndian.Uint16(node.data[LeafHeaderFreeSpaceOffset:])
+}
+
+func (node *LeafPage) RightSibling() uint64 {
+	return binary.LittleEndian.Uint64(node.data[LeafHeaderSiblingOffset:])
+}
+
+func (node *LeafPage) SetPageType(pageType PageType) {
+	binary.LittleEndian.PutUint16(node.data[LeafHeaderTypeOffset:], uint16(pageType))
+}
+
+func (node *LeafPage) SetCellCount(count uint16) {
+	binary.LittleEndian.PutUint16(node.data[LeafHeaderCellsOffset:], count)
+}
+
+func (node *LeafPage) SetFreeSpacePointer(pointer uint16) {
+	binary.LittleEndian.PutUint16(node.data[LeafHeaderFreeSpaceOffset:], pointer)
+}
+
+func (node *LeafPage) SetRightSibling(siblingID uint64) {
+	binary.LittleEndian.PutUint64(node.data[LeafHeaderSiblingOffset:], siblingID)
+}
+
+func (node *LeafPage) GetCell(offset uint16) Cell {
+	offset32 := uint32(offset)
+
+	keyLen := uint32(binary.LittleEndian.Uint16(node.data[offset32 : offset32+2])) // key length is 2 bytes
+	valLen := binary.LittleEndian.Uint32(node.data[offset32+2 : offset32+6])       // value length is 4 bytes to support larger values
+
+	keyStart := offset32 + CellHeaderSize
+	valStart := keyStart + keyLen
+
+	return Cell{
+		Key:   node.data[keyStart : keyStart+keyLen],
+		Value: node.data[valStart : valStart+valLen],
+	}
+}
+
+func (node *LeafPage) WriteCell(offset uint16, key []byte, value []byte) uint16 {
+	offset32 := uint32(offset)
+	keyLen := uint32(len(key))
+	valLen := uint32(len(value))
+
+	binary.LittleEndian.PutUint16(node.data[offset32:offset32+2], uint16(keyLen))
+	binary.LittleEndian.PutUint32(node.data[offset32+2:offset32+6], valLen)
+
+	keyStart := offset32 + CellHeaderSize
+	copy(node.data[keyStart:], key)
+
+	valStart := keyStart + keyLen
+	copy(node.data[valStart:], value)
+
+	return uint16(CellHeaderSize + keyLen + valLen)
+}
+
+var ErrPageFull = errors.New("page is full")
+var ErrKeyNotFound = errors.New("key not found")
