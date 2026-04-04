@@ -378,6 +378,18 @@ func TestPageReuse(t *testing.T) {
 	bpm.UnpinPage(id3, false)
 }
 
+// TestGetPoolSize tests the GetPoolSize method
+func TestGetPoolSize(t *testing.T) {
+	testCases := []int{1, 5, 10, 20, 50, 100}
+
+	for _, size := range testCases {
+		bpm := createTestBufferPool(t, size)
+		if bpm.GetPoolSize() != size {
+			t.Fatalf("expected pool size %d, got %d", size, bpm.GetPoolSize())
+		}
+	}
+}
+
 // Helper function to create test disk manager
 func createTestDiskManager(t *testing.T) *DiskManager {
 	tmpDir := t.TempDir()

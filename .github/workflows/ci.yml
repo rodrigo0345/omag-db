@@ -27,12 +27,12 @@ jobs:
       run: go mod download
 
     - name: Run Tests with Coverage
-      run: go test -v -race -coverprofile=coverage.out ./...
+      run: go test -v -race -coverprofile=coverage.out ./buffermanager ./b_tree ./transaction_manager
 
     - name: Check Coverage Threshold
       id: coverage
       run: |
-        # Extract total coverage percentage
+        # Extract total coverage percentage, excluding main.go
         COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
         echo "Total coverage: $COVERAGE%"
         

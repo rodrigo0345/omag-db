@@ -185,7 +185,7 @@ func (tree *BTree) Insert(txn *transaction_manager.Transaction, key []byte, valu
 	err = leaf.Insert(key, value)
 
 	if err == ErrPageFull {
-		leafPage.WUnlock()
+		// Don't unlock here - splitLeaf expects the lock to be held
 		return tree.splitLeaf(txn, path, leafPage, leafID, key, value)
 	}
 
@@ -348,7 +348,7 @@ func (tree *BTree) promoteKey(txn *transaction_manager.Transaction, path []uint6
 	err = parent.Insert(key, childID)
 
 	if err == ErrPageFull {
-		parentPage.WUnlock()
+		// Don't unlock here - splitInternal expects the lock to be held
 		return tree.splitInternal(txn, path, parentPage, parentID, key, childID)
 	}
 

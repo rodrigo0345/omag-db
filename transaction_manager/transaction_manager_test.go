@@ -295,26 +295,26 @@ func TestTransaction_EmptyUndoLog(t *testing.T) {
 }
 
 // TestLockManager_MultipleTransactions tests locks with multiple transactions
-// func TestLockManager_MultipleTransactions(t *testing.T) {
-// 	lockMgr := NewLockManager()
-// 	txnMgr := NewTransactionManager(nil)
-//
-// 	txn1 := txnMgr.Begin()
-// 	txn2 := txnMgr.Begin()
-//
-// 	key := []byte("shared_resource")
-//
-// 	// Both transactions can acquire shared locks
-// 	err1 := lockMgr.AcquireSharedLock(txn1.GetID(), key)
-// 	err2 := lockMgr.AcquireSharedLock(txn2.GetID(), key)
-//
-// 	if err1 != nil || err2 != nil {
-// 		t.Fatal("both transactions should be able to acquire shared lock")
-// 	}
-//
-// 	lockMgr.ReleaseLock(txn1.GetID(), key)
-// 	lockMgr.ReleaseLock(txn2.GetID(), key)
-//
-// 	txnMgr.Commit(txn1)
-// 	txnMgr.Commit(txn2)
-// }
+func TestLockManager_MultipleTransactions(t *testing.T) {
+	lockMgr := NewLockManager()
+	txnMgr := NewTransactionManager(nil)
+
+	txn1 := txnMgr.Begin()
+	txn2 := txnMgr.Begin()
+
+	key := []byte("shared_resource")
+
+	// Both transactions can acquire shared locks
+	err1 := lockMgr.LockShared(txn1, key)
+	err2 := lockMgr.LockShared(txn2, key)
+
+	if err1 != nil || err2 != nil {
+		t.Fatal("both transactions should be able to acquire shared lock")
+	}
+
+	lockMgr.Unlock(txn1, key)
+	lockMgr.Unlock(txn2, key)
+
+	txnMgr.Commit(txn1)
+	txnMgr.Commit(txn2)
+}
