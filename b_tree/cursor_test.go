@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/rodrigo0345/omag/buffermanager"
 )
 
 func TestCursor_NextEmpty(t *testing.T) {
@@ -107,7 +109,7 @@ func TestPersistence(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dbPath := filepath.Join(tmpDir, "test.db")
-	pager, err := NewPager(dbPath, 1024, false) // 1kb pages to force splits easily
+	pager, err := buffermanager.NewPager(dbPath, 1024, false) // 1kb pages to force splits easily
 	if err != nil {
 		t.Fatalf("failed to create pager: %v", err)
 	}
@@ -133,7 +135,7 @@ func TestPersistence(t *testing.T) {
 	pager.Close()
 
 	// Reopen
-	pager2, err := NewPager(dbPath, 1024, false)
+	pager2, err := buffermanager.NewPager(dbPath, 1024, false)
 	if err != nil {
 		t.Fatalf("failed to open pager: %v", err)
 	}

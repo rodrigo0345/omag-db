@@ -12,16 +12,16 @@ var (
 )
 
 type BTree struct {
-	pager *Pager
-	meta  *MetaPage
+	bufferManager *BufferManager
+	meta          *MetaPage
 }
 
 func NewBTree(pager *Pager) (*BTree, error) {
-	tree := &BTree{pager: pager}
+	tree := &BTree{bufferManager: pager}
 
 	if pager.PageCount() == 0 {
-		meta := NewMetaPage()
-		root := NewLeafPage(pager.pageSize)
+		meta := NewMetaPageWithSize(pager.PageSize())
+		root := NewLeafPage(pager.PageSize())
 
 		metaID, _, err := pager.AllocatePage()
 		if err != nil {
@@ -63,7 +63,7 @@ func (tree *BTree) Find(key []byte) ([]byte, error) {
 	}
 
 	leafID := path[len(path)-1]
-	leafData, err := tree.pager.FetchPage(leafID)
+	leafData, err := tree.bufferManager.FetchPage(leafID)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func (tree *BTree) Delete(key []byte) error {
 	}
 
 	leafID := path[len(path)-1]
-	leafData, err := tree.pager.FetchPage(leafID)
+	leafData, err := tree.bufferManager.FetchPage(leafID)
 	if err != nil {
 		return err
 	}
@@ -99,7 +99,7 @@ func (tree *BTree) Delete(key []byte) error {
 	if err != nil {
 		return err
 	}
-	return tree.pager.WritePage(leafID, leaf.data)
+	return tree.bufferManager.WritePage(leafID, leaf.data)
 }
 
 func (tree *BTree) Insert(key []byte, value []byte) error {
@@ -110,7 +110,7 @@ func (tree *BTree) Insert(key []byte, value []byte) error {
 	}
 
 	leafID := path[len(path)-1]
-	leafData, err := tree.pager.FetchPage(leafID)
+	leafData, err := tree.bufferManager.FetchPage(leafID)
 	if err != nil {
 		return err
 	}
@@ -125,15 +125,15 @@ func (tree *BTree) Insert(key []byte, value []byte) error {
 		return err
 	}
 
-	return tree.pager.WritePage(leafID, leaf.data)
+	return tree.bufferManager.WritePage(leafID, leaf.data)
 }
 
 func (tree *BTree) splitLeaf(path []uint64, leaf *LeafPage, leafID uint64, key, value []byte) error {
-	newPageID, _, err := tree.pager.AllocatePage()
+	newPageID, _, err := tree.bufferManager.AllocatePage()
 	if err != nil {
 		return err
 	}
-	newPage := NewLeafPage(tree.pager.pageSize)
+	newPage := NewLeafPage(tree.bufferManager.PageSize())
 
 	promotedKey := leaf.Split(newPage, newPageID)
 
@@ -148,10 +148,10 @@ func (tree *BTree) splitLeaf(path []uint64, leaf *LeafPage, leafID uint64, key, 
 		}
 	}
 
-	if err := tree.pager.WritePage(leafID, leaf.data); err != nil {
+	if err := tree.bufferManager.WritePage(leafID, leaf.data); err != nil {
 		return err
 	}
-	if err := tree.pager.WritePage(newPageID, newPage.data); err != nil {
+	if err := tree.bufferManager.WritePage(newPageID, newPage.data); err != nil {
 		return err
 	}
 
@@ -164,7 +164,7 @@ func (tree *BTree) promoteKey(path []uint64, key []byte, childID uint64) error {
 	}
 
 	parentID := path[len(path)-1]
-	parentData, err := tree.pager.FetchPage(parentID)
+	parentData, err := tree.bufferManager.FetchPage(parentID)
 	if err != nil {
 		return err
 	}
@@ -179,15 +179,15 @@ func (tree *BTree) promoteKey(path []uint64, key []byte, childID uint64) error {
 		return err
 	}
 
-	return tree.pager.WritePage(parentID, parent.data)
+	return tree.bufferManager.WritePage(parentID, parent.data)
 }
 
 func (tree *BTree) splitInternal(path []uint64, parent *InternalPage, parentID uint64, key []byte, childID uint64) error {
-	newPageID, _, err := tree.pager.AllocatePage()
+	newPageID, _, err := tree.bufferManager.AllocatePage()
 	if err != nil {
 		return err
 	}
-	newPage := NewInternalPage(tree.pager.pageSize)
+	newPage := NewInternalPage(tree.bufferManager.PageSize())
 
 	promotedKey := parent.Split(newPage)
 
@@ -202,10 +202,10 @@ func (tree *BTree) splitInternal(path []uint64, parent *InternalPage, parentID u
 		}
 	}
 
-	if err := tree.pager.WritePage(parentID, parent.data); err != nil {
+	if err := tree.bufferManager.WritePage(parentID, parent.data); err != nil {
 		return err
 	}
-	if err := tree.pager.WritePage(newPageID, newPage.data); err != nil {
+	if err := tree.bufferManager.WritePage(newPageID, newPage.data); err != nil {
 		return err
 	}
 
@@ -213,33 +213,33 @@ func (tree *BTree) splitInternal(path []uint64, parent *InternalPage, parentID u
 }
 
 func (tree *BTree) createNewRoot(oldRootID uint64, key []byte, rightChildID uint64) error {
-	newRootID, _, err := tree.pager.AllocatePage()
+	newRootID, _, err := tree.bufferManager.AllocatePage()
 	if err != nil {
 		return err
 	}
 
-	newRoot := NewInternalPage(tree.pager.pageSize)
+	newRoot := NewInternalPage(tree.bufferManager.PageSize())
 	newRoot.SetRightmostPointer(rightChildID)
 
 	if err := newRoot.Insert(key, oldRootID); err != nil { // The left child has the smaller keys
 		return err
 	}
 
-	if err := tree.pager.WritePage(newRootID, newRoot.data); err != nil {
+	if err := tree.bufferManager.WritePage(newRootID, newRoot.data); err != nil {
 		return err
 	}
 
 	tree.meta.SetRootPage(newRootID)
-	return tree.pager.WritePage(0, tree.meta.data)
+	return tree.bufferManager.WritePage(0, tree.meta.data)
 }
 
 func (tree *BTree) findLeafPage(pageID uint64, key []byte) ([]uint64, error) {
 	var path []uint64
 
 	for {
-		path = append(path, pageID)
+		path = append(path, pageID) // breadcrumb
 
-		pageData, err := tree.pager.FetchPage(pageID)
+		pageData, err := tree.bufferManager.FetchPage(pageID)
 		if err != nil {
 			return nil, err
 		}

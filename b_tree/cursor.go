@@ -3,10 +3,10 @@ package btree
 import "encoding/binary"
 
 type TreeCursor struct {
-	tree         *BTree
-	currentPage  *LeafPage
+	tree          *BTree
+	currentPage   *LeafPage
 	currentPageID uint64
-	currentCell  int
+	currentCell   int
 }
 
 func (tree *BTree) Cursor() (Cursor, error) {
@@ -24,7 +24,7 @@ func (c *TreeCursor) Seek(key []byte) error {
 	}
 
 	c.currentPageID = path[len(path)-1]
-	leafData, err := c.tree.pager.FetchPage(c.currentPageID)
+	leafData, err := c.tree.bufferManager.FetchPage(c.currentPageID)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func (c *TreeCursor) First() error {
 	pageID := c.tree.meta.RootPage()
 
 	for {
-		pageData, err := c.tree.pager.FetchPage(pageID)
+		pageData, err := c.tree.bufferManager.FetchPage(pageID)
 		if err != nil {
 			return err
 		}
@@ -100,7 +100,7 @@ func (c *TreeCursor) Next() error {
 			return nil
 		}
 
-		pageData, err := c.tree.pager.FetchPage(nextPageID)
+		pageData, err := c.tree.bufferManager.FetchPage(nextPageID)
 		if err != nil {
 			return err
 		}

@@ -5,14 +5,28 @@ import (
 	"os"
 )
 
+const (
+	MetaTypeOffset     = 0  // 2 bytes (PageType)
+	MetaMagicOffset    = 2  // 4 bytes (uint32)
+	MetaVersionOffset  = 6  // 2 bytes (uint16)
+	MetaPageSizeOffset = 8  // 4 bytes (uint32)
+	MetaRootPageOffset = 12 // 8 bytes (uint64)
+)
+
 type MetaPage struct {
 	data []byte
 }
 
 func NewMetaPage() *MetaPage {
-	pageSize := uint32(os.Getpagesize())
-	if pageSize < 4096 {
-		pageSize = DefaultPageSize
+	return NewMetaPageWithSize(0)
+}
+
+func NewMetaPageWithSize(pageSize uint32) *MetaPage {
+	if pageSize == 0 {
+		pageSize = uint32(os.Getpagesize())
+		if pageSize < DefaultPageSize {
+			pageSize = DefaultPageSize
+		}
 	}
 
 	m := &MetaPage{
