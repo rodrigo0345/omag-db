@@ -455,7 +455,7 @@ func (tree *BTree) createNewRoot(txn *transaction_manager.Transaction, oldRootID
 	tree.meta.SetRootPage(uint64(newRootID))
 
 	// Write meta page
-	metaPage, err := tree.bufferPool.FetchPage(0)
+	metaPage, err := tree.bufferPool.PinPage(buffermanager.PageID(0))
 	if err != nil {
 		return err
 	}
@@ -473,7 +473,7 @@ func (tree *BTree) findLeafPage(pageID uint64, key []byte) ([]uint64, error) {
 	for {
 		path = append(path, pageID) // breadcrumb
 
-		pageObj, err := tree.bufferPool.FetchPage(buffermanager.PageID(pageID))
+		pageObj, err := tree.bufferPool.PinPage(buffermanager.PageID(pageID))
 		if err != nil {
 			return nil, err
 		}
@@ -489,7 +489,7 @@ func (tree *BTree) findLeafPage(pageID uint64, key []byte) ([]uint64, error) {
 		case TypeLeaf:
 			return path, nil
 		case TypeInternal:
-			pageObj2, err := tree.bufferPool.FetchPage(buffermanager.PageID(pageID))
+			pageObj2, err := tree.bufferPool.PinPage(buffermanager.PageID(pageID))
 			if err != nil {
 				return nil, err
 			}
