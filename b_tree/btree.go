@@ -6,9 +6,9 @@ import (
 	"errors"
 
 	"github.com/rodrigo0345/omag/buffermanager"
+	"github.com/rodrigo0345/omag/logmanager"
 	"github.com/rodrigo0345/omag/resource_page"
 	"github.com/rodrigo0345/omag/transaction_manager"
-	"github.com/rodrigo0345/omag/wal"
 )
 
 var (
@@ -19,20 +19,20 @@ var (
 type BTree struct {
 	bufferPool  *buffermanager.BufferPoolManager
 	lockManager *transaction_manager.LockManager
-	walMgr      *wal.WALManager
+	logManager  logmanager.ILogManager
 	meta        *MetaPage
 }
 
 func NewBTree(
 	bufferPool *buffermanager.BufferPoolManager,
 	lockManager *transaction_manager.LockManager,
-	walMgr *wal.WALManager,
+	walMgr logmanager.ILogManager,
 	pageSize uint32,
 ) (*BTree, error) {
 	tree := &BTree{
 		bufferPool:  bufferPool,
 		lockManager: lockManager,
-		walMgr:      walMgr,
+		logManager:  walMgr,
 	}
 
 	// Try to fetch the meta page
@@ -135,12 +135,18 @@ func (tree *BTree) Delete(txn *transaction_manager.Transaction, key []byte) erro
 	}
 
 	// Append DELETE to WAL before writing
-	walRec := wal.WALRecord{
+	walRec := logmanager.WALRecord{
 		TxnID:  txn.GetID(),
-		Type:   wal.UPDATE,
-		PageID: wal.PageID(leafID),
+		Type:   logmanager.UPDATE,
+		PageID: resource_page.ResourcePageID(leafID),
 	}
-	tree.walMgr.AppendLog(walRec)
+
+	_, err = tree.logManager.AppendLogRecord(walRec)
+	if err != nil {
+		leafPage.WUnlock()
+		tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), false)
+		panic(err)
+	}
 
 	leafPage.SetDirty(true)
 	leafPage.WUnlock()
@@ -197,13 +203,18 @@ func (tree *BTree) Insert(txn *transaction_manager.Transaction, key []byte, valu
 	}
 
 	// Append INSERT to WAL before writing
-	walRec := wal.WALRecord{
+	walRec := logmanager.WALRecord{
 		TxnID:  txn.GetID(),
-		Type:   wal.UPDATE,
-		PageID: wal.PageID(leafID),
+		Type:   logmanager.UPDATE,
+		PageID: resource_page.ResourcePageID(leafID),
 		After:  value,
 	}
-	tree.walMgr.AppendLog(walRec)
+	_, err = tree.logManager.AppendLogRecord(walRec)
+	if err != nil {
+		leafPage.WUnlock()
+		tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), false)
+		panic(err)
+	}
 
 	leafPage.SetDirty(true)
 	leafPage.WUnlock()
@@ -312,12 +323,18 @@ func (tree *BTree) splitLeaf(txn *transaction_manager.Transaction, path []uint64
 	}
 
 	// Log to WAL
-	walRec := wal.WALRecord{
+	walRec := logmanager.WALRecord{
 		TxnID:  txn.GetID(),
-		Type:   wal.UPDATE,
-		PageID: wal.PageID(leafID),
+		Type:   logmanager.UPDATE,
+		PageID: resource_page.ResourcePageID(leafID),
 	}
-	tree.walMgr.AppendLog(walRec)
+	_, err = tree.logManager.AppendLogRecord(walRec)
+	if err != nil {
+		leafPage.WUnlock()
+		tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), false)
+		tree.bufferPool.UnpinPage(resource_page.ResourcePageID(newPageID), false)
+		panic(err)
+	}
 
 	// Write both pages
 	copy(leafPage.GetData(), leaf.data)
@@ -360,12 +377,17 @@ func (tree *BTree) promoteKey(txn *transaction_manager.Transaction, path []uint6
 	}
 
 	// Log to WAL
-	walRec := wal.WALRecord{
+	walRec := logmanager.WALRecord{
 		TxnID:  txn.GetID(),
-		Type:   wal.UPDATE,
-		PageID: wal.PageID(parentID),
+		Type:   logmanager.UPDATE,
+		PageID: resource_page.ResourcePageID(parentID),
 	}
-	tree.walMgr.AppendLog(walRec)
+	_, err = tree.logManager.AppendLogRecord(walRec)
+	if err != nil {
+		parentPage.WUnlock()
+		tree.bufferPool.UnpinPage(resource_page.ResourcePageID(parentID), false)
+		panic(err)
+	}
 
 	parentPage.SetDirty(true)
 	parentPage.WUnlock()
@@ -408,12 +430,18 @@ func (tree *BTree) splitInternal(txn *transaction_manager.Transaction, path []ui
 	}
 
 	// Log to WAL
-	walRec := wal.WALRecord{
+	walRec := logmanager.WALRecord{
 		TxnID:  txn.GetID(),
-		Type:   wal.UPDATE,
-		PageID: wal.PageID(parentID),
+		Type:   logmanager.UPDATE,
+		PageID: resource_page.ResourcePageID(parentID),
 	}
-	tree.walMgr.AppendLog(walRec)
+
+	_, err = tree.logManager.AppendLogRecord(walRec)
+	if err != nil {
+		parentPage.WUnlock()
+		tree.bufferPool.UnpinPage(resource_page.ResourcePageID(parentID), false)
+		panic(err)
+	}
 
 	// Write both pages
 	copy(parentPage.GetData(), parent.data)
@@ -443,12 +471,15 @@ func (tree *BTree) createNewRoot(txn *transaction_manager.Transaction, oldRootID
 	}
 
 	// Log to WAL
-	walRec := wal.WALRecord{
+	walRec := logmanager.WALRecord{
 		TxnID:  txn.GetID(),
-		Type:   wal.UPDATE,
-		PageID: wal.PageID(newRootID),
+		Type:   logmanager.UPDATE,
+		PageID: resource_page.ResourcePageID(newRootID),
 	}
-	tree.walMgr.AppendLog(walRec)
+	_, err = tree.logManager.AppendLogRecord(walRec)
+	if err != nil {
+		return err
+	}
 
 	copy(newRootPage.GetData(), newRoot.data)
 	tree.bufferPool.UnpinPage(resource_page.ResourcePageID(newRootID), true)

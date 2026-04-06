@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/rodrigo0345/omag/buffermanager"
+	"github.com/rodrigo0345/omag/logmanager"
 	"github.com/rodrigo0345/omag/transaction_manager"
-	"github.com/rodrigo0345/omag/wal"
 )
 
 // setupBTreeComponents creates all necessary components for testing
@@ -40,7 +40,7 @@ func setupBTreeComponents(t *testing.T, pageSize uint32) (*BTree, *transaction_m
 	lockMgr := transaction_manager.NewLockManager()
 
 	// Create WAL manager
-	walMgr, err := wal.NewWALManager(walFile.Name())
+	walMgr, err := logmanager.NewWALManager(walFile.Name())
 	if err != nil {
 		t.Fatalf("failed to create WAL manager: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestNewBTree_Empty(t *testing.T) {
 	if tree.lockManager == nil {
 		t.Fatalf("lockManager not initialized")
 	}
-	if tree.walMgr == nil {
+	if tree.logManager == nil {
 		t.Fatalf("walMgr not initialized")
 	}
 
@@ -104,7 +104,7 @@ func TestNewBTree_Existing(t *testing.T) {
 	walFile2.Close()
 	t.Cleanup(func() { os.Remove(walFile2.Name()) })
 
-	walMgr2, err := wal.NewWALManager(walFile2.Name())
+	walMgr2, err := logmanager.NewWALManager(walFile2.Name())
 	if err != nil {
 		t.Fatalf("failed to create WAL manager: %v", err)
 	}

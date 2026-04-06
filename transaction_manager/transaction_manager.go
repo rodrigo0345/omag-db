@@ -1,16 +1,16 @@
 package transaction_manager
 
 import (
-	"github.com/rodrigo0345/omag/wal"
+	"github.com/rodrigo0345/omag/logmanager"
 )
 
 type TransactionManager struct {
 	nextTxnID  uint64
-	walMgr     *wal.WALManager
+	walMgr     logmanager.ILogManager
 	bufferPool interface{} // BufferPoolManager reference (to avoid circular imports)
 }
 
-func NewTransactionManager(walMgr *wal.WALManager) *TransactionManager {
+func NewTransactionManager(walMgr logmanager.ILogManager) *TransactionManager {
 	return &TransactionManager{
 		walMgr: walMgr,
 	}
@@ -36,11 +36,15 @@ func (tm *TransactionManager) Commit(txn *Transaction) error {
 	txn.state = COMMITTED
 
 	if tm.walMgr != nil {
-		rec := wal.WALRecord{
+		rec := logmanager.WALRecord{
 			TxnID: txn.GetID(),
-			Type:  wal.COMMIT,
+			Type:  logmanager.COMMIT,
 		}
-		lsn := tm.walMgr.AppendLog(rec)
+		lsn, err := tm.walMgr.AppendLogRecord(rec)
+		if err != nil {
+			return err
+		}
+
 		// Force flush on commit to ensure durability
 		tm.walMgr.Flush(lsn)
 	}
@@ -63,11 +67,14 @@ func (tm *TransactionManager) Abort(txn *Transaction) error {
 	txn.state = ABORTED
 
 	if tm.walMgr != nil {
-		rec := wal.WALRecord{
+		rec := logmanager.WALRecord{
 			TxnID: txn.GetID(),
-			Type:  wal.ABORT,
+			Type:  logmanager.ABORT,
 		}
-		lsn := tm.walMgr.AppendLog(rec)
+		lsn, err := tm.walMgr.AppendLogRecord(rec)
+		if err != nil {
+			return err
+		}
 		tm.walMgr.Flush(lsn)
 	}
 

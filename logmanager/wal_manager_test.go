@@ -1,6 +1,7 @@
-package wal
+package logmanager
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,11 +18,16 @@ func TestNewWALManager_Success(t *testing.T) {
 	}
 	defer wm.Close()
 
-	if wm.logFile == nil {
-		t.Fatal("expected logFile to be initialized")
-	}
-	if wm.lsn != 0 {
-		t.Fatalf("expected initial LSN 0, got %d", wm.lsn)
+	switch v := wm.(type) {
+	case *WALManager:
+		if v.logFile == nil {
+			t.Fatal("expected logFile to be initialized")
+		}
+		if v.lsn != 0 {
+			t.Fatalf("expected initial LSN 0, got %d", v.lsn)
+		}
+	default:
+		t.Fatalf("unexpected type: %T", wm)
 	}
 }
 
@@ -51,7 +57,10 @@ func TestAppendLog_SerializesCorrectly(t *testing.T) {
 		After:  []byte("newdata"),
 	}
 
-	lsn := wm.AppendLog(rec)
+	lsn, err := wm.AppendLogRecord(rec)
+	if err != nil {
+		t.Fatalf("failed to append log record: %v", err)
+	}
 
 	if lsn != 1 {
 		t.Fatalf("expected LSN 1, got %d", lsn)
@@ -73,7 +82,11 @@ func TestAppendLog_SequentialLSN(t *testing.T) {
 	lsns := make([]uint64, 5)
 	for i := 0; i < 5; i++ {
 		rec := WALRecord{TxnID: uint64(i + 1), Type: UPDATE}
-		lsns[i] = wm.AppendLog(rec)
+		lsn, err := wm.AppendLogRecord(rec)
+		if err != nil {
+			t.Fatalf("failed to append log record: %v", err)
+		}
+		lsns[i] = uint64(lsn)
 	}
 
 	// Verify sequential LSNs
@@ -95,7 +108,10 @@ func TestAppendLog_DifferentRecordTypes(t *testing.T) {
 	types := []RecordType{UPDATE, COMMIT, ABORT, CHECKPOINT}
 	for _, rt := range types {
 		rec := WALRecord{Type: rt, TxnID: 1}
-		lsn := wm.AppendLog(rec)
+		lsn, err := wm.AppendLogRecord(rec)
+		if err != nil {
+			t.Fatalf("failed to append record of type %d: %v", rt, err)
+		}
 		if lsn == 0 {
 			t.Fatalf("failed to append record of type %d", rt)
 		}
@@ -118,7 +134,10 @@ func TestAppendLog_WritesToFile(t *testing.T) {
 		After:  []byte("after"),
 	}
 
-	wm.AppendLog(rec)
+	_, err := wm.AppendLogRecord(rec)
+	if err != nil {
+		t.Fatalf("failed to append log record: %v", err)
+	}
 	wm.Close()
 
 	// Check file exists and has size > 0
@@ -152,7 +171,10 @@ func TestAppendLog_LargeData(t *testing.T) {
 		After:  largeData,
 	}
 
-	lsn := wm.AppendLog(rec)
+	lsn, err := wm.AppendLogRecord(rec)
+	if err != nil {
+		t.Fatalf("failed to append large record: %v", err)
+	}
 	if lsn != 1 {
 		t.Fatalf("failed to append large record, LSN: %d", lsn)
 	}
@@ -167,9 +189,12 @@ func TestFlush_Success(t *testing.T) {
 	defer wm.Close()
 
 	rec := WALRecord{TxnID: 5, Type: COMMIT}
-	lsn := wm.AppendLog(rec)
+	lsn, err := wm.AppendLogRecord(rec)
+	if err != nil {
+		t.Fatalf("failed to append log record: %v", err)
+	}
 
-	err := wm.Flush(lsn)
+	err = wm.Flush(lsn)
 	if err != nil {
 		t.Fatalf("failed to flush: %v", err)
 	}
@@ -225,13 +250,13 @@ func TestRecover_SimpleTransaction(t *testing.T) {
 		Before: []byte("old"),
 		After:  []byte("new"),
 	}
-	wm.AppendLog(updateRec)
+	wm.AppendLogRecord(updateRec)
 
 	commitRec := WALRecord{
 		TxnID: 1,
 		Type:  COMMIT,
 	}
-	wm.AppendLog(commitRec)
+	wm.AppendLogRecord(commitRec)
 	wm.Close()
 
 	// Recover
@@ -262,15 +287,30 @@ func TestRecover_MultipleTransactions(t *testing.T) {
 	wm, _ := NewWALManager(walFile)
 
 	// Transaction 1: updates page 1, then commits
-	wm.AppendLog(WALRecord{TxnID: 1, Type: UPDATE, PageID: 1, After: []byte("txn1_page1")})
-	wm.AppendLog(WALRecord{TxnID: 1, Type: COMMIT})
+	_, err := wm.AppendLogRecord(WALRecord{TxnID: 1, Type: UPDATE, PageID: 1, After: []byte("txn1_page1")})
+	if err != nil {
+		t.Fatalf("failed to append log record: %v", err)
+	}
+	_, err = wm.AppendLogRecord(WALRecord{TxnID: 1, Type: COMMIT})
+	if err != nil {
+		t.Fatalf("failed to append log record: %v", err)
+	}
 
 	// Transaction 2: updates page 2, then commits
-	wm.AppendLog(WALRecord{TxnID: 2, Type: UPDATE, PageID: 2, After: []byte("txn2_page2")})
-	wm.AppendLog(WALRecord{TxnID: 2, Type: COMMIT})
+	_, err = wm.AppendLogRecord(WALRecord{TxnID: 2, Type: UPDATE, PageID: 2, After: []byte("txn2_page2")})
+	if err != nil {
+		t.Fatalf("failed to append log record: %v", err)
+	}
+	_, err = wm.AppendLogRecord(WALRecord{TxnID: 2, Type: COMMIT})
+	if err != nil {
+		t.Fatalf("failed to append log record: %v", err)
+	}
 
 	// Transaction 3: updates page 3 (but never commits)
-	wm.AppendLog(WALRecord{TxnID: 3, Type: UPDATE, PageID: 3, After: []byte("txn3_page3")})
+	_, err = wm.AppendLogRecord(WALRecord{TxnID: 3, Type: UPDATE, PageID: 3, After: []byte("txn3_page3")})
+	if err != nil {
+		t.Fatalf("failed to append log record: %v", err)
+	}
 
 	wm.Close()
 
@@ -316,8 +356,14 @@ func TestRecover_AbortedTransaction(t *testing.T) {
 	wm, _ := NewWALManager(walFile)
 
 	// Transaction that updates then aborts
-	wm.AppendLog(WALRecord{TxnID: 1, Type: UPDATE, PageID: 1, After: []byte("should_not_exist")})
-	wm.AppendLog(WALRecord{TxnID: 1, Type: ABORT})
+	_, err := wm.AppendLogRecord(WALRecord{TxnID: 1, Type: UPDATE, PageID: 1, After: []byte("should_not_exist")})
+	if err != nil {
+		t.Fatalf("failed to append log record: %v", err)
+	}
+	_, err = wm.AppendLogRecord(WALRecord{TxnID: 1, Type: ABORT})
+	if err != nil {
+		t.Fatalf("failed to append log record: %v", err)
+	}
 
 	wm.Close()
 
@@ -365,20 +411,26 @@ func TestCheckpoint_ResetsCheckpoint(t *testing.T) {
 	defer wm.Close()
 
 	// Add some dirty pages
-	wm.AppendLog(WALRecord{TxnID: 1, Type: UPDATE, PageID: 1})
-	wm.AppendLog(WALRecord{TxnID: 1, Type: UPDATE, PageID: 2})
+	wm.AppendLogRecord(WALRecord{TxnID: 1, Type: UPDATE, PageID: 1})
+	wm.AppendLogRecord(WALRecord{TxnID: 1, Type: UPDATE, PageID: 2})
 
-	dirtyBefore := wm.GetDirtyPages()
-	if len(dirtyBefore) != 2 {
-		t.Fatalf("expected 2 dirty pages, got %d", len(dirtyBefore))
-	}
+	switch v := wm.(type) {
+	case *WALManager:
+		dirtyBefore := v.GetDirtyPages()
+		if len(dirtyBefore) != 2 {
+			t.Fatalf("expected 2 dirty pages, got %d", len(dirtyBefore))
+		}
 
-	// Take checkpoint
-	wm.Checkpoint()
+		// Take checkpoint
+		wm.Checkpoint()
 
-	dirtyAfter := wm.GetDirtyPages()
-	if len(dirtyAfter) != 0 {
-		t.Fatalf("expected 0 dirty pages after checkpoint, got %d", len(dirtyAfter))
+		dirtyAfter := v.GetDirtyPages()
+		if len(dirtyAfter) != 0 {
+			t.Fatalf("expected 0 dirty pages after checkpoint, got %d", len(dirtyAfter))
+		}
+
+	default:
+		panic(fmt.Sprintf("unexpected type %T for WALManager", v))
 	}
 }
 
@@ -390,15 +442,15 @@ func TestCheckpoint_WithRecovery(t *testing.T) {
 	wm, _ := NewWALManager(walFile)
 
 	// Pre-checkpoint transaction
-	wm.AppendLog(WALRecord{TxnID: 1, Type: UPDATE, PageID: 1, After: []byte("pre_checkpoint")})
-	wm.AppendLog(WALRecord{TxnID: 1, Type: COMMIT})
+	wm.AppendLogRecord(WALRecord{TxnID: 1, Type: UPDATE, PageID: 1, After: []byte("pre_checkpoint")})
+	wm.AppendLogRecord(WALRecord{TxnID: 1, Type: COMMIT})
 
 	// Checkpoint
 	wm.Checkpoint()
 
 	// Post-checkpoint transaction
-	wm.AppendLog(WALRecord{TxnID: 2, Type: UPDATE, PageID: 2, After: []byte("post_checkpoint")})
-	wm.AppendLog(WALRecord{TxnID: 2, Type: COMMIT})
+	wm.AppendLogRecord(WALRecord{TxnID: 2, Type: UPDATE, PageID: 2, After: []byte("post_checkpoint")})
+	wm.AppendLogRecord(WALRecord{TxnID: 2, Type: COMMIT})
 
 	wm.Close()
 
@@ -436,20 +488,20 @@ func TestRecover_ComplexScenario(t *testing.T) {
 	wm, _ := NewWALManager(walFile)
 
 	// Txn 1: committed
-	wm.AppendLog(WALRecord{TxnID: 1, Type: UPDATE, PageID: 10, After: []byte("txn1_p10")})
-	wm.AppendLog(WALRecord{TxnID: 1, Type: UPDATE, PageID: 11, After: []byte("txn1_p11")})
-	wm.AppendLog(WALRecord{TxnID: 1, Type: COMMIT})
+	wm.AppendLogRecord(WALRecord{TxnID: 1, Type: UPDATE, PageID: 10, After: []byte("txn1_p10")})
+	wm.AppendLogRecord(WALRecord{TxnID: 1, Type: UPDATE, PageID: 11, After: []byte("txn1_p11")})
+	wm.AppendLogRecord(WALRecord{TxnID: 1, Type: COMMIT})
 
 	// Txn 2: aborted
-	wm.AppendLog(WALRecord{TxnID: 2, Type: UPDATE, PageID: 20, After: []byte("txn2_p20")})
-	wm.AppendLog(WALRecord{TxnID: 2, Type: ABORT})
+	wm.AppendLogRecord(WALRecord{TxnID: 2, Type: UPDATE, PageID: 20, After: []byte("txn2_p20")})
+	wm.AppendLogRecord(WALRecord{TxnID: 2, Type: ABORT})
 
 	// Txn 3: pending (will be rolled back during recovery)
-	wm.AppendLog(WALRecord{TxnID: 3, Type: UPDATE, PageID: 30, After: []byte("txn3_p30")})
+	wm.AppendLogRecord(WALRecord{TxnID: 3, Type: UPDATE, PageID: 30, After: []byte("txn3_p30")})
 
 	// Txn 4: committed after txn 3
-	wm.AppendLog(WALRecord{TxnID: 4, Type: UPDATE, PageID: 40, After: []byte("txn4_p40")})
-	wm.AppendLog(WALRecord{TxnID: 4, Type: COMMIT})
+	wm.AppendLogRecord(WALRecord{TxnID: 4, Type: UPDATE, PageID: 40, After: []byte("txn4_p40")})
+	wm.AppendLogRecord(WALRecord{TxnID: 4, Type: COMMIT})
 
 	wm.Close()
 
@@ -579,8 +631,8 @@ func TestAppendLog_MultipleRecords(t *testing.T) {
 	}
 
 	for i, rec := range records {
-		lsn := wm.AppendLog(rec)
-		if lsn != uint64(i+1) {
+		lsn, _ := wm.AppendLogRecord(rec)
+		if uint64(lsn) != uint64(i+1) {
 			t.Fatalf("record %d: expected LSN %d, got %d", i, i+1, lsn)
 		}
 	}
@@ -601,7 +653,7 @@ func TestAppendLog_Serialization_Format(t *testing.T) {
 		After:  []byte("newdata"),
 	}
 
-	lsn := wm.AppendLog(rec)
+	lsn, _ := wm.AppendLogRecord(rec)
 
 	if lsn != 1 {
 		t.Fatalf("expected LSN 1, got %d", lsn)
@@ -624,8 +676,8 @@ func TestAppendLog_ConcurrentAppends(t *testing.T) {
 	// (full concurrency test would require goroutines)
 	for i := 0; i < 10; i++ {
 		rec := WALRecord{TxnID: uint64(i), Type: UPDATE}
-		lsn := wm.AppendLog(rec)
-		if lsn != uint64(i+1) {
+		lsn, _ := wm.AppendLogRecord(rec)
+		if uint64(lsn) != uint64(i+1) {
 			t.Fatalf("append %d: expected LSN %d, got %d", i, i+1, lsn)
 		}
 	}
@@ -681,8 +733,8 @@ func TestAppendLog_EmptyDataFields(t *testing.T) {
 		After:  []byte{},
 	}
 
-	lsn := wm.AppendLog(rec)
-	if lsn != 1 {
+	lsn, _ := wm.AppendLogRecord(rec)
+	if uint64(lsn) != 1 {
 		t.Fatalf("failed to append record with empty data, LSN: %d", lsn)
 	}
 }

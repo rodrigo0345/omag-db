@@ -1,4 +1,4 @@
-package wal
+package logmanager
 
 import (
 	"encoding/binary"
@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"sync"
+
+	"github.com/rodrigo0345/omag/resource_page"
 )
 
 // RecordType defines the type of WAL record following ARIES conventions
@@ -18,27 +20,10 @@ const (
 	CHECKPOINT                   // Fuzzy checkpoint record
 )
 
-// PageID represents a unique page identifier in the buffer pool
-type PageID uint32
-
-// WALRecord represents a single entry in the Write-Ahead Log
-// Each record follows the ARIES format for recovery and durability
-type WALRecord struct {
-	LSN     uint64     // Log Sequence Number (monotonically increasing, uniquely identifies this record)
-	PrevLSN uint64     // LSN of the previous record for this transaction (enables efficient backward walking)
-	TxnID   uint64     // Transaction ID of the transaction that generated this record
-	Type    RecordType // Type of record (UPDATE, COMMIT, ABORT, or CHECKPOINT)
-	PageID  PageID     // Page affected by this record (only meaningful for UPDATE records)
-	Offset  uint16     // Offset within the page where the update occurred
-	PageLSN uint64     // LSN of the last log record that modified this page (for idempotency checking)
-	Before  []byte     // Before image (used for undo during rollback)
-	After   []byte     // After image (used for redo during recovery)
-}
-
 // DirtyPageTable (DPT) maps PageID to its RedoLSN
 // RedoLSN is the LSN of the first log record that modified this page after the last checkpoint
 // ARIES builds this table during the Analysis phase
-type DirtyPageTable map[PageID]uint64
+type DirtyPageTable map[resource_page.ResourcePageID]uint64
 
 // ActiveTransactionTable (ATT) maps TxnID to information about active transactions
 // Used during checkpoint and recovery to track which transactions were active
@@ -58,9 +43,9 @@ type CheckpointMetadata struct {
 // This state is used to restore the database to a consistent state after a crash
 type RecoveryState struct {
 	// Committed and Aborted transaction sets
-	CommittedTxns map[uint64]bool   // Set of transaction IDs that committed
-	AbortedTxns   map[uint64]bool   // Set of transaction IDs that need undo during recovery
-	PageStates    map[PageID][]byte // Final page states after recovery (maps PageID to final PageLSN)
+	CommittedTxns map[uint64]bool                         // Set of transaction IDs that committed
+	AbortedTxns   map[uint64]bool                         // Set of transaction IDs that need undo during recovery
+	PageStates    map[resource_page.ResourcePageID][]byte // Final page states after recovery (maps PageID to final PageLSN)
 
 	// Recovery metadata
 	CheckpointMetadata *CheckpointMetadata
@@ -87,14 +72,14 @@ type WALManager struct {
 	lastCheckpointATT ActiveTransactionTable
 
 	// Transaction state tracking
-	activeTxns   map[uint64]bool   // Map of active transaction IDs
-	txnLastLSN   map[uint64]uint64 // Map of TxnID to last LSN (for PrevLSN calculation)
-	pageVersions map[PageID]uint64 // Map of PageID to its current PageLSN (for idempotency)
+	activeTxns   map[uint64]bool                         // Map of active transaction IDs
+	txnLastLSN   map[uint64]uint64                       // Map of TxnID to last LSN (for PrevLSN calculation)
+	pageVersions map[resource_page.ResourcePageID]uint64 // Map of PageID to its current PageLSN (for idempotency)
 }
 
 // NewWALManager creates and initializes a new WAL manager
 // Initializes the log file and internal data structures
-func NewWALManager(filePath string) (*WALManager, error) {
+func NewWALManager(filePath string) (ILogManager, error) {
 	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o666)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open WAL file: %w", err)
@@ -107,59 +92,65 @@ func NewWALManager(filePath string) (*WALManager, error) {
 		lastCheckpointATT: make(ActiveTransactionTable),
 		activeTxns:        make(map[uint64]bool),
 		txnLastLSN:        make(map[uint64]uint64),
-		pageVersions:      make(map[PageID]uint64),
+		pageVersions:      make(map[resource_page.ResourcePageID]uint64),
 	}, nil
 }
 
 // AppendLog appends a WAL record to the log file and returns its LSN
 // Thread-safe operation that ensures proper transaction and page tracking
 // Sets PrevLSN to enable efficient backward-walking during undo phase
-func (wm *WALManager) AppendLog(rec WALRecord) uint64 {
+func (wm *WALManager) AppendLogRecord(rec ILogRecord) (LSN, error) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
-	// Assign the next LSN
-	wm.lsn++
-	rec.LSN = wm.lsn
+	switch v := rec.(type) {
+	case *WALRecord:
+		// Assign the next LSN
+		wm.lsn++
+		v.SetLSN(wm.lsn)
 
-	// Set PrevLSN to the last LSN of this transaction (for backward-walking)
-	rec.PrevLSN = wm.txnLastLSN[rec.TxnID]
-	wm.txnLastLSN[rec.TxnID] = rec.LSN
+		// Set PrevLSN to the last LSN of this transaction (for backward-walking)
+		v.SetPrevLSN(wm.txnLastLSN[v.GetTxnID()])
+		wm.txnLastLSN[v.GetTxnID()] = v.GetLSN()
 
-	// Update transaction and page tracking
-	switch rec.Type {
-	case COMMIT:
-		// Transaction committed, remove from active set
-		delete(wm.activeTxns, rec.TxnID)
+		// Update transaction and page tracking
+		switch v.GetType() {
+		case COMMIT:
+			// Transaction committed, remove from active set
+			delete(wm.activeTxns, v.GetTxnID())
 
-	case ABORT:
-		// Transaction aborted, remove from active set
-		delete(wm.activeTxns, rec.TxnID)
+		case ABORT:
+			// Transaction aborted, remove from active set
+			delete(wm.activeTxns, v.GetTxnID())
 
-	case UPDATE:
-		// Mark transaction as active
-		wm.activeTxns[rec.TxnID] = true
+		case UPDATE:
+			// Mark transaction as active
+			wm.activeTxns[v.GetTxnID()] = true
 
-		// Set PageLSN on the record (for idempotency checking during redo)
-		rec.PageLSN = wm.pageVersions[rec.PageID]
-		wm.pageVersions[rec.PageID] = rec.LSN
+			// Set PageLSN on the record (for idempotency checking during redo)
+			v.SetPageLSN(wm.pageVersions[v.GetPageID()])
+			wm.pageVersions[v.GetPageID()] = v.GetLSN()
 
-		// Track dirty page: record the LSN of the first modification after checkpoint
-		if _, exists := wm.lastCheckpointDPT[rec.PageID]; !exists {
-			wm.lastCheckpointDPT[rec.PageID] = rec.LSN
+			// Track dirty page: record the LSN of the first modification after checkpoint
+			if _, exists := wm.lastCheckpointDPT[v.GetPageID()]; !exists {
+				wm.lastCheckpointDPT[v.GetPageID()] = v.GetLSN()
+			}
+
+		case CHECKPOINT:
+			// Checkpoint records don't need special tracking here
 		}
 
-	case CHECKPOINT:
-		// Checkpoint records don't need special tracking here
+		// Serialize and write the record
+		buf := wm.serializeWALRecord(*v)
+		if _, err := wm.logFile.Write(buf); err != nil {
+			return 0, fmt.Errorf("failed to write WAL record: %w", err)
+		}
+
+		return LSN(wm.lsn), nil
+	default:
+		return 0, fmt.Errorf("unsupported log record type: %T", rec)
 	}
 
-	// Serialize and write the record
-	buf := wm.serializeWALRecord(rec)
-	if _, err := wm.logFile.Write(buf); err != nil {
-		return 0
-	}
-
-	return wm.lsn
 }
 
 // serializeWALRecord converts a WALRecord to its binary representation
@@ -213,7 +204,7 @@ func (wm *WALManager) deserializeWALRecord(reader io.Reader) (*WALRecord, error)
 	rec.PrevLSN = binary.LittleEndian.Uint64(header[8:16])
 	rec.TxnID = binary.LittleEndian.Uint64(header[16:24])
 	rec.Type = RecordType(header[24])
-	rec.PageID = PageID(binary.LittleEndian.Uint32(header[25:29]))
+	rec.PageID = resource_page.ResourcePageID(binary.LittleEndian.Uint32(header[25:29]))
 	rec.Offset = binary.LittleEndian.Uint16(header[29:31])
 	rec.PageLSN = binary.LittleEndian.Uint64(header[31:39])
 
@@ -248,7 +239,7 @@ func (wm *WALManager) deserializeWALRecord(reader io.Reader) (*WALRecord, error)
 
 // Flush forces the WAL buffer to disk, ensuring durability
 // Required to be called after critical operations (e.g., COMMIT records)
-func (wm *WALManager) Flush(upToLSN uint64) error {
+func (wm *WALManager) Flush(upToLSN LSN) error {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
@@ -267,7 +258,7 @@ func (wm *WALManager) Recover() (*RecoveryState, error) {
 	state := &RecoveryState{
 		CommittedTxns: make(map[uint64]bool),
 		AbortedTxns:   make(map[uint64]bool),
-		PageStates:    make(map[PageID][]byte),
+		PageStates:    make(map[resource_page.ResourcePageID][]byte),
 		DirtyPages:    make(DirtyPageTable),
 		UndoList:      make([]*WALRecord, 0),
 		TobeRedone:    make(map[uint64][]uint64),
@@ -364,7 +355,7 @@ func (wm *WALManager) redoPhase(file *os.File, state *RecoveryState) error {
 	file.Seek(0, 0)
 
 	// Track the current PageLSN for idempotency checking
-	pageCurrentLSN := make(map[PageID]uint64)
+	pageCurrentLSN := make(map[resource_page.ResourcePageID]uint64)
 
 	for {
 		rec, err := wm.deserializeWALRecord(file)
@@ -550,11 +541,12 @@ func (wm *WALManager) GetLastCheckpointLSN() uint64 {
 
 // GetDirtyPages returns a copy of the current dirty page table
 // Maps PageID to its RedoLSN
-func (wm *WALManager) GetDirtyPages() map[PageID]uint64 {
+func (wm *WALManager) GetDirtyPages() map[resource_page.ResourcePageID]uint64 {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
-	pages := make(map[PageID]uint64)
+	pages := make(map[resource_page.ResourcePageID]uint64)
+
 	for k, v := range wm.lastCheckpointDPT {
 		pages[k] = v
 	}

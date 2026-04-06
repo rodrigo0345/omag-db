@@ -9,8 +9,9 @@ import (
 
 	btree "github.com/rodrigo0345/omag/b_tree"
 	"github.com/rodrigo0345/omag/buffermanager"
+	"github.com/rodrigo0345/omag/logmanager"
+	"github.com/rodrigo0345/omag/resource_page"
 	"github.com/rodrigo0345/omag/transaction_manager"
-	"github.com/rodrigo0345/omag/wal"
 )
 
 const (
@@ -23,7 +24,7 @@ type DatabaseTUI struct {
 	txnMgr        *transaction_manager.TransactionManager
 	bufferPool    *buffermanager.BufferPoolManager
 	diskMgr       *buffermanager.DiskManager
-	walMgr        *wal.WALManager
+	walMgr        logmanager.ILogManager
 	lockMgr       *transaction_manager.LockManager
 	statsInserts  int64
 	statsDeletes  int64
@@ -48,7 +49,7 @@ func NewDatabaseTUI() (*DatabaseTUI, error) {
 	lockMgr := transaction_manager.NewLockManager()
 
 	// Create WAL manager
-	walMgr, err := wal.NewWALManager(walPath)
+	walMgr, err := logmanager.NewWALManager(walPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WAL manager: %w", err)
 	}
@@ -88,7 +89,7 @@ func NewDatabaseTUI() (*DatabaseTUI, error) {
 			paddedData := make([]byte, 4096)
 			copy(paddedData, pageData)
 
-			if err := diskMgr.WritePage(buffermanager.PageID(pageID), paddedData); err != nil {
+			if err := diskMgr.WritePage(resource_page.ResourcePageID(pageID), paddedData); err != nil {
 				return nil, fmt.Errorf("failed to write recovered page %d: %w", pageID, err)
 			}
 		}
@@ -356,13 +357,13 @@ func (db *DatabaseTUI) listWAL() error {
 	for _, r := range records {
 		typeName := ""
 		switch r.Type {
-		case wal.UPDATE:
+		case logmanager.UPDATE:
 			typeName = "UPDATE"
-		case wal.COMMIT:
+		case logmanager.COMMIT:
 			typeName = "COMMIT"
-		case wal.ABORT:
+		case logmanager.ABORT:
 			typeName = "ABORT"
-		case wal.CHECKPOINT:
+		case logmanager.CHECKPOINT:
 			typeName = "CHKPT"
 		}
 

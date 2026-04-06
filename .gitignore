@@ -2,3 +2,4 @@ omag
 
 *.db
 *.wal
+**/*debug*

@@ -157,7 +157,7 @@ func (dm *DiskManager) WritePage(pageID resource_page.ResourcePageID, pageData [
 }
 
 // ReadPage uses ReadAt to remain compatible with the stateless model
-func (dm *DiskManager) ReadPage(pageID PageID, pageData []byte) error {
+func (dm *DiskManager) ReadPage(pageID resource_page.ResourcePageID, pageData []byte) error {
 	dm.mu.RLock()
 	defer dm.mu.RUnlock()
 
@@ -166,7 +166,7 @@ func (dm *DiskManager) ReadPage(pageID PageID, pageData []byte) error {
 	}
 
 	// calculate the offset and read the page data directly into the provided pageData buffer
-	offset := int64(pageID) * int64(PageSize)
+	offset := int64(pageID) * int64(resource_page.PageSize)
 
 	// read up until len(pageData)
 	_, err := dm.dbFile.ReadAt(pageData, offset)
@@ -177,7 +177,7 @@ func (dm *DiskManager) ReadPage(pageID PageID, pageData []byte) error {
 	return nil
 }
 
-func (dm *DiskManager) AllocatePage() PageID {
+func (dm *DiskManager) AllocatePage() resource_page.ResourcePageID {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
@@ -226,7 +226,7 @@ func (dm *DiskManager) Flush() error {
 	done := make(chan struct{})
 	dm.writeQueue <- writeRequest{
 		pageID:   0,
-		pageData: make([]byte, PageSize), // Empty/dummy data
+		pageData: make([]byte, resource_page.PageSize), // Empty/dummy data
 		done:     done,
 		isMarker: true, // This is a flush marker, don't actually write it
 	}
