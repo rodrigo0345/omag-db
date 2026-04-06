@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/rodrigo0345/omag/buffermanager"
+	"github.com/rodrigo0345/omag/resource_page"
 	"github.com/rodrigo0345/omag/transaction_manager"
 	"github.com/rodrigo0345/omag/wal"
 )
@@ -81,7 +82,7 @@ func (tree *BTree) Find(txn *transaction_manager.Transaction, key []byte) ([]byt
 	}
 
 	leafID := path[len(path)-1]
-	leafPage, err := tree.bufferPool.PinPage(buffermanager.PageID(leafID)) // auto pins the memory, needs manual unpin
+	leafPage, err := tree.bufferPool.PinPage(resource_page.ResourcePageID(leafID)) // auto pins the memory, needs manual unpin
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +91,7 @@ func (tree *BTree) Find(txn *transaction_manager.Transaction, key []byte) ([]byt
 	leafPage.RLock()
 	defer func() {
 		leafPage.RUnlock()
-		tree.bufferPool.UnpinPage(buffermanager.PageID(leafID), false)
+		tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), false)
 	}()
 
 	leaf := &LeafPage{data: leafPage.GetData()}
@@ -116,7 +117,7 @@ func (tree *BTree) Delete(txn *transaction_manager.Transaction, key []byte) erro
 	}
 
 	leafID := path[len(path)-1]
-	leafPage, err := tree.bufferPool.PinPage(buffermanager.PageID(leafID))
+	leafPage, err := tree.bufferPool.PinPage(resource_page.ResourcePageID(leafID))
 	if err != nil {
 		return err
 	}
@@ -129,7 +130,7 @@ func (tree *BTree) Delete(txn *transaction_manager.Transaction, key []byte) erro
 
 	if err != nil {
 		leafPage.WUnlock()
-		tree.bufferPool.UnpinPage(buffermanager.PageID(leafID), false)
+		tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), false)
 		return err
 	}
 
@@ -144,7 +145,7 @@ func (tree *BTree) Delete(txn *transaction_manager.Transaction, key []byte) erro
 	leafPage.SetDirty(true)
 	leafPage.WUnlock()
 
-	if err := tree.bufferPool.UnpinPage(buffermanager.PageID(leafID), true); err != nil {
+	if err := tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), true); err != nil {
 		return err
 	}
 
@@ -174,7 +175,7 @@ func (tree *BTree) Insert(txn *transaction_manager.Transaction, key []byte, valu
 	}
 
 	leafID := path[len(path)-1]
-	leafPage, err := tree.bufferPool.PinPage(buffermanager.PageID(leafID))
+	leafPage, err := tree.bufferPool.PinPage(resource_page.ResourcePageID(leafID))
 	if err != nil {
 		return err
 	}
@@ -191,7 +192,7 @@ func (tree *BTree) Insert(txn *transaction_manager.Transaction, key []byte, valu
 
 	if err != nil {
 		leafPage.WUnlock()
-		tree.bufferPool.UnpinPage(buffermanager.PageID(leafID), false)
+		tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), false)
 		return err
 	}
 
@@ -207,7 +208,7 @@ func (tree *BTree) Insert(txn *transaction_manager.Transaction, key []byte, valu
 	leafPage.SetDirty(true)
 	leafPage.WUnlock()
 
-	if err := tree.bufferPool.UnpinPage(buffermanager.PageID(leafID), true); err != nil {
+	if err := tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), true); err != nil {
 		return err
 	}
 
@@ -240,7 +241,7 @@ func (tree *BTree) RangeScan(txn *transaction_manager.Transaction, lo, hi []byte
 
 	// Scan through leaf pages until we exceed hi
 	for leafID != 0 {
-		leafPage, err := tree.bufferPool.PinPage(buffermanager.PageID(leafID))
+		leafPage, err := tree.bufferPool.PinPage(resource_page.ResourcePageID(leafID))
 		if err != nil {
 			return nil, err
 		}
@@ -255,7 +256,7 @@ func (tree *BTree) RangeScan(txn *transaction_manager.Transaction, lo, hi []byte
 				results = append(results, KVPair{Key: cell.Key, Value: cell.Value})
 			} else if bytes.Compare(cell.Key, hi) > 0 {
 				leafPage.RUnlock()
-				tree.bufferPool.UnpinPage(buffermanager.PageID(leafID), false)
+				tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), false)
 				return results, nil
 			}
 		}
@@ -263,7 +264,7 @@ func (tree *BTree) RangeScan(txn *transaction_manager.Transaction, lo, hi []byte
 		// Move to next leaf
 		nextLeafID := leaf.RightSibling()
 		leafPage.RUnlock()
-		tree.bufferPool.UnpinPage(buffermanager.PageID(leafID), false)
+		tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), false)
 
 		leafID = nextLeafID
 	}
@@ -276,13 +277,13 @@ type KVPair struct {
 	Value []byte
 }
 
-func (tree *BTree) splitLeaf(txn *transaction_manager.Transaction, path []uint64, leafPage *buffermanager.Page, leafID uint64, key, value []byte) error {
+func (tree *BTree) splitLeaf(txn *transaction_manager.Transaction, path []uint64, leafPage resource_page.IResourcePage, leafID uint64, key, value []byte) error {
 	leaf := &LeafPage{data: leafPage.GetData()}
 
 	newPage, err := tree.bufferPool.NewPage()
 	if err != nil {
 		leafPage.WUnlock()
-		ret := tree.bufferPool.UnpinPage(buffermanager.PageID(leafID), false)
+		ret := tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), false)
 		if retErr := ret; retErr != nil {
 			return retErr
 		}
@@ -297,15 +298,15 @@ func (tree *BTree) splitLeaf(txn *transaction_manager.Transaction, path []uint64
 	if bytes.Compare(key, promotedKey) < 0 {
 		if err := leaf.Insert(key, value); err != nil {
 			leafPage.WUnlock()
-			tree.bufferPool.UnpinPage(buffermanager.PageID(leafID), false)
-			tree.bufferPool.UnpinPage(newPageID, false)
+			tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), false)
+			tree.bufferPool.UnpinPage(resource_page.ResourcePageID(newPageID), false)
 			return err
 		}
 	} else {
 		if err := newPageData.Insert(key, value); err != nil {
 			leafPage.WUnlock()
-			tree.bufferPool.UnpinPage(buffermanager.PageID(leafID), false)
-			tree.bufferPool.UnpinPage(newPageID, false)
+			tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), false)
+			tree.bufferPool.UnpinPage(resource_page.ResourcePageID(newPageID), false)
 			return err
 		}
 	}
@@ -322,7 +323,7 @@ func (tree *BTree) splitLeaf(txn *transaction_manager.Transaction, path []uint64
 	copy(leafPage.GetData(), leaf.data)
 	leafPage.SetDirty(true)
 	leafPage.WUnlock()
-	tree.bufferPool.UnpinPage(buffermanager.PageID(leafID), true)
+	tree.bufferPool.UnpinPage(resource_page.ResourcePageID(leafID), true)
 
 	copy(newPage.GetData(), newPageData.data)
 	newPage.SetDirty(true)
@@ -337,7 +338,7 @@ func (tree *BTree) promoteKey(txn *transaction_manager.Transaction, path []uint6
 	}
 
 	parentID := path[len(path)-1]
-	parentPage, err := tree.bufferPool.PinPage(buffermanager.PageID(parentID))
+	parentPage, err := tree.bufferPool.PinPage(resource_page.ResourcePageID(parentID))
 	if err != nil {
 		return err
 	}
@@ -354,7 +355,7 @@ func (tree *BTree) promoteKey(txn *transaction_manager.Transaction, path []uint6
 
 	if err != nil {
 		parentPage.WUnlock()
-		tree.bufferPool.UnpinPage(buffermanager.PageID(parentID), false)
+		tree.bufferPool.UnpinPage(resource_page.ResourcePageID(parentID), false)
 		return err
 	}
 
@@ -369,16 +370,16 @@ func (tree *BTree) promoteKey(txn *transaction_manager.Transaction, path []uint6
 	parentPage.SetDirty(true)
 	parentPage.WUnlock()
 
-	return tree.bufferPool.UnpinPage(buffermanager.PageID(parentID), true)
+	return tree.bufferPool.UnpinPage(resource_page.ResourcePageID(parentID), true)
 }
 
-func (tree *BTree) splitInternal(txn *transaction_manager.Transaction, path []uint64, parentPage *buffermanager.Page, parentID uint64, key []byte, childID uint64) error {
+func (tree *BTree) splitInternal(txn *transaction_manager.Transaction, path []uint64, parentPage resource_page.IResourcePage, parentID uint64, key []byte, childID uint64) error {
 	parent := &InternalPage{data: parentPage.GetData()}
 
 	newPage, err := tree.bufferPool.NewPage()
 	if err != nil {
 		parentPage.WUnlock()
-		ret := tree.bufferPool.UnpinPage(buffermanager.PageID(parentID), false)
+		ret := tree.bufferPool.UnpinPage(resource_page.ResourcePageID(parentID), false)
 		if retErr := ret; retErr != nil {
 			return retErr
 		}
@@ -393,15 +394,15 @@ func (tree *BTree) splitInternal(txn *transaction_manager.Transaction, path []ui
 	if bytes.Compare(key, promotedKey) < 0 {
 		if err := parent.Insert(key, childID); err != nil {
 			parentPage.WUnlock()
-			tree.bufferPool.UnpinPage(buffermanager.PageID(parentID), false)
-			tree.bufferPool.UnpinPage(newPageID, false)
+			tree.bufferPool.UnpinPage(resource_page.ResourcePageID(parentID), false)
+			tree.bufferPool.UnpinPage(resource_page.ResourcePageID(newPageID), false)
 			return err
 		}
 	} else {
 		if err := newPageData.Insert(key, childID); err != nil {
 			parentPage.WUnlock()
-			tree.bufferPool.UnpinPage(buffermanager.PageID(parentID), false)
-			tree.bufferPool.UnpinPage(newPageID, false)
+			tree.bufferPool.UnpinPage(resource_page.ResourcePageID(parentID), false)
+			tree.bufferPool.UnpinPage(resource_page.ResourcePageID(newPageID), false)
 			return err
 		}
 	}
@@ -418,11 +419,11 @@ func (tree *BTree) splitInternal(txn *transaction_manager.Transaction, path []ui
 	copy(parentPage.GetData(), parent.data)
 	parentPage.SetDirty(true)
 	parentPage.WUnlock()
-	tree.bufferPool.UnpinPage(buffermanager.PageID(parentID), true)
+	tree.bufferPool.UnpinPage(resource_page.ResourcePageID(parentID), true)
 
 	copy(newPage.GetData(), newPageData.data)
 	newPage.SetDirty(true)
-	tree.bufferPool.UnpinPage(newPageID, true)
+	tree.bufferPool.UnpinPage(resource_page.ResourcePageID(newPageID), true)
 
 	return tree.promoteKey(txn, path[:len(path)-1], promotedKey, uint64(newPageID))
 }
@@ -450,12 +451,12 @@ func (tree *BTree) createNewRoot(txn *transaction_manager.Transaction, oldRootID
 	tree.walMgr.AppendLog(walRec)
 
 	copy(newRootPage.GetData(), newRoot.data)
-	tree.bufferPool.UnpinPage(newRootID, true)
+	tree.bufferPool.UnpinPage(resource_page.ResourcePageID(newRootID), true)
 
 	tree.meta.SetRootPage(uint64(newRootID))
 
 	// Write meta page
-	metaPage, err := tree.bufferPool.PinPage(buffermanager.PageID(0))
+	metaPage, err := tree.bufferPool.PinPage(resource_page.ResourcePageID(0))
 	if err != nil {
 		return err
 	}
@@ -464,7 +465,7 @@ func (tree *BTree) createNewRoot(txn *transaction_manager.Transaction, oldRootID
 	metaPage.SetDirty(true)
 	metaPage.WUnlock()
 
-	return tree.bufferPool.UnpinPage(0, true)
+	return tree.bufferPool.UnpinPage(resource_page.ResourcePageID(0), true)
 }
 
 func (tree *BTree) findLeafPage(pageID uint64, key []byte) ([]uint64, error) {
@@ -473,7 +474,7 @@ func (tree *BTree) findLeafPage(pageID uint64, key []byte) ([]uint64, error) {
 	for {
 		path = append(path, pageID) // breadcrumb
 
-		pageObj, err := tree.bufferPool.PinPage(buffermanager.PageID(pageID))
+		pageObj, err := tree.bufferPool.PinPage(resource_page.ResourcePageID(pageID))
 		if err != nil {
 			return nil, err
 		}
@@ -483,13 +484,13 @@ func (tree *BTree) findLeafPage(pageID uint64, key []byte) ([]uint64, error) {
 		pageType := PageType(binary.LittleEndian.Uint16(pageData[0:2]))
 		pageObj.RUnlock()
 
-		tree.bufferPool.UnpinPage(buffermanager.PageID(pageID), false)
+		tree.bufferPool.UnpinPage(resource_page.ResourcePageID(pageID), false)
 
 		switch pageType {
 		case TypeLeaf:
 			return path, nil
 		case TypeInternal:
-			pageObj2, err := tree.bufferPool.PinPage(buffermanager.PageID(pageID))
+			pageObj2, err := tree.bufferPool.PinPage(resource_page.ResourcePageID(pageID))
 			if err != nil {
 				return nil, err
 			}
@@ -497,7 +498,7 @@ func (tree *BTree) findLeafPage(pageID uint64, key []byte) ([]uint64, error) {
 			internal := &InternalPage{data: pageObj2.GetData()}
 			pageID = internal.Search(key)
 			pageObj2.RUnlock()
-			tree.bufferPool.UnpinPage(buffermanager.PageID(pageID), false)
+			tree.bufferPool.UnpinPage(resource_page.ResourcePageID(pageID), false)
 		default:
 			return nil, ErrInvalidPageType
 		}

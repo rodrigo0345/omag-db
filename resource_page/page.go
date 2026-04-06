@@ -1,13 +1,13 @@
-package buffermanager
+package resource_page
 
 import "sync"
 
-type PageID uint64
+type ResourcePageID uint64
 
 const PageSize = 4096
 
-type Page struct {
-	id       PageID
+type ResourcePage struct {
+	id       ResourcePageID
 	data     [PageSize]byte
 	pinCount int32
 	isDirty  bool
@@ -15,8 +15,8 @@ type Page struct {
 	rwMutex  sync.RWMutex // physical latch
 }
 
-func NewPage(id PageID) *Page {
-	return &Page{
+func NewResourcePage(id ResourcePageID) IResourcePage {
+	return &ResourcePage{
 		id:       id,
 		pinCount: 0,
 		isDirty:  false,
@@ -25,67 +25,75 @@ func NewPage(id PageID) *Page {
 }
 
 // RLock acquires a read lock on the page
-func (p *Page) RLock() {
+func (p *ResourcePage) RLock() {
 	p.rwMutex.RLock()
 }
 
 // RUnlock releases a read lock on the page
-func (p *Page) RUnlock() {
+func (p *ResourcePage) RUnlock() {
 	p.rwMutex.RUnlock()
 }
 
 // WLock acquires a write lock on the page
-func (p *Page) WLock() {
+func (p *ResourcePage) WLock() {
 	p.rwMutex.Lock()
 }
 
 // WUnlock releases a write lock on the page
-func (p *Page) WUnlock() {
+func (p *ResourcePage) WUnlock() {
 	p.rwMutex.Unlock()
 }
 
 // GetData returns a slice of the page data
-func (p *Page) GetData() []byte {
+func (p *ResourcePage) GetData() []byte {
 	return p.data[:]
 }
 
 // GetID returns the page ID
-func (p *Page) GetID() PageID {
+func (p *ResourcePage) GetID() ResourcePageID {
 	return p.id
 }
 
 // GetPinCount returns the pin count
-func (p *Page) GetPinCount() int32 {
+func (p *ResourcePage) GetPinCount() int32 {
 	return p.pinCount
 }
 
 // SetPinCount sets the pin count
-func (p *Page) SetPinCount(count int32) {
+func (p *ResourcePage) SetPinCount(count int32) {
 	p.pinCount = count
 }
 
 // IsDirty returns whether the page has been modified
-func (p *Page) IsDirty() bool {
+func (p *ResourcePage) IsDirty() bool {
 	return p.isDirty
 }
 
 // SetDirty marks the page as dirty
-func (p *Page) SetDirty(dirty bool) {
+func (p *ResourcePage) SetDirty(dirty bool) {
 	p.isDirty = dirty
 }
 
 // GetLSN returns the page's LSN (Log Sequence Number)
-func (p *Page) GetLSN() uint64 {
+func (p *ResourcePage) GetLSN() uint64 {
 	return p.pageLSN
 }
 
 // SetLSN sets the page's LSN
-func (p *Page) SetLSN(lsn uint64) {
+func (p *ResourcePage) SetLSN(lsn uint64) {
 	p.pageLSN = lsn
 }
 
-func (p *Page) DeepClean() {
+func (p *ResourcePage) DeepClean() {
 	for i := range p.data {
 		p.data[i] = 0
 	}
+}
+
+func (p *ResourcePage) ReplacePage(newID ResourcePageID) {
+	p.id = newID
+	p.pinCount = 1
+	p.isDirty = false
+	p.pageLSN = 0
+	p.DeepClean()
 }

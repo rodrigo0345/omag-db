@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/rodrigo0345/omag/replacer"
+	"github.com/rodrigo0345/omag/resource_page"
 )
 
 var (
@@ -28,8 +29,8 @@ type WALFlusher interface {
 
 type BufferPoolManager struct {
 	poolSize        int
-	frames          []*Page                     // actual cache buffer with configurable replacement policy
-	pageTable       map[PageID]replacer.FrameID // logical PageID to physical FrameID mapping
+	frames          []resource_page.IResourcePage                     // actual cache buffer with configurable replacement policy
+	pageTable       map[resource_page.ResourcePageID]replacer.FrameID // logical PageID to physical FrameID mapping
 	freeList        []replacer.FrameID
 	diskManager     *DiskManager
 	replacerManager replacer.IReplacer
@@ -47,18 +48,18 @@ func NewBufferPoolManagerWithReplacer(
 	poolSize int,
 	diskManager *DiskManager,
 	replacerManager replacer.IReplacer) *BufferPoolManager {
-	frames := make([]*Page, poolSize)
+	frames := make([]resource_page.IResourcePage, poolSize)
 	freeList := make([]replacer.FrameID, poolSize)
 
 	for i := 0; i < poolSize; i++ {
-		frames[i] = NewPage(PageID(i))
+		frames[i] = resource_page.NewResourcePage(resource_page.ResourcePageID(i))
 		freeList[i] = replacer.FrameID(i)
 	}
 
 	return &BufferPoolManager{
 		poolSize:        poolSize,
 		frames:          frames,
-		pageTable:       make(map[PageID]replacer.FrameID),
+		pageTable:       make(map[resource_page.ResourcePageID]replacer.FrameID),
 		freeList:        freeList,
 		diskManager:     diskManager,
 		replacerManager: replacerManager,
@@ -73,7 +74,7 @@ func (bpm *BufferPoolManager) SetWALManager(walMgr interface{}) {
 
 // flushPageInternal handles the WAL protocol + Disk I/O sequence.
 // bpm.mu MUST be held when calling this.
-func (bpm *BufferPoolManager) flushPageInternal(page *Page) error {
+func (bpm *BufferPoolManager) flushPageInternal(page resource_page.IResourcePage) error {
 
 	// if the page is not dirty, we can skip the flush
 	if !page.IsDirty() {
@@ -83,7 +84,7 @@ func (bpm *BufferPoolManager) flushPageInternal(page *Page) error {
 	// make sure all WAL records up to pageLSN of this page are flushed before writing the page to disk
 	if bpm.walMgr != nil {
 		if flusher, ok := bpm.walMgr.(WALFlusher); ok {
-			if err := flusher.Flush(page.pageLSN); err != nil {
+			if err := flusher.Flush(page.GetLSN()); err != nil {
 				return err
 			}
 		}
@@ -99,7 +100,7 @@ func (bpm *BufferPoolManager) flushPageInternal(page *Page) error {
 }
 
 // can be thought of as the "fetch page" operation
-func (bpm *BufferPoolManager) PinPage(pageID PageID) (*Page, error) {
+func (bpm *BufferPoolManager) PinPage(pageID resource_page.ResourcePageID) (resource_page.IResourcePage, error) {
 	bpm.mu.Lock()
 
 	// if the page is already in the buffer pool, just pin and return it
@@ -118,15 +119,12 @@ func (bpm *BufferPoolManager) PinPage(pageID PageID) (*Page, error) {
 	}
 
 	frame := bpm.frames[frameID]
-	frame.id = pageID
-	frame.SetPinCount(1)
-	frame.SetDirty(false)
-	frame.pageLSN = 0 // Reset LSN for newly loaded content
+	frame.ReplacePage(pageID)
 
 	// fill the frame's data with the page content from disk
 	if err := bpm.diskManager.ReadPage(pageID, frame.GetData()); err != nil {
-		// Clear data if page doesn't exist yet
-		frame.DeepClean()
+		bpm.mu.Unlock()
+		return nil, err
 	}
 
 	bpm.pageTable[pageID] = frameID
@@ -136,7 +134,7 @@ func (bpm *BufferPoolManager) PinPage(pageID PageID) (*Page, error) {
 	return frame, nil
 }
 
-func (bpm *BufferPoolManager) UnpinPage(pageID PageID, isDirty bool) error {
+func (bpm *BufferPoolManager) UnpinPage(pageID resource_page.ResourcePageID, isDirty bool) error {
 	bpm.mu.Lock()
 	defer bpm.mu.Unlock()
 
@@ -161,7 +159,7 @@ func (bpm *BufferPoolManager) UnpinPage(pageID PageID, isDirty bool) error {
 	return nil
 }
 
-func (bpm *BufferPoolManager) NewPage() (*Page, error) {
+func (bpm *BufferPoolManager) NewPage() (resource_page.IResourcePage, error) {
 	bpm.mu.Lock()
 
 	pageID := bpm.diskManager.AllocatePage()
@@ -173,14 +171,7 @@ func (bpm *BufferPoolManager) NewPage() (*Page, error) {
 	}
 
 	frame := bpm.frames[frameID]
-	frame.id = pageID
-	frame.SetPinCount(1)
-	frame.SetDirty(false)
-	frame.pageLSN = 0
-
-	for i := range frame.data {
-		frame.data[i] = 0
-	}
+	frame.ReplacePage(pageID)
 
 	bpm.pageTable[pageID] = frameID
 	bpm.replacerManager.Pin(frameID)
@@ -189,7 +180,7 @@ func (bpm *BufferPoolManager) NewPage() (*Page, error) {
 	return frame, nil
 }
 
-func (bpm *BufferPoolManager) FlushPage(pageID PageID) error {
+func (bpm *BufferPoolManager) FlushPage(pageID resource_page.ResourcePageID) error {
 	bpm.mu.Lock()
 	defer bpm.mu.Unlock()
 

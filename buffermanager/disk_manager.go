@@ -6,6 +6,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/rodrigo0345/omag/resource_page"
 )
 
 var (
@@ -18,7 +20,7 @@ const (
 )
 
 type writeRequest struct {
-	pageID   PageID
+	pageID   resource_page.ResourcePageID
 	pageData []byte
 	done     chan struct{} // Used for synchronization in Flush
 	isMarker bool          // True if this is a flush marker, not a real write
@@ -26,7 +28,7 @@ type writeRequest struct {
 
 type DiskManager struct {
 	dbFile     *os.File
-	nextPage   PageID
+	nextPage   resource_page.ResourcePageID
 	mu         sync.RWMutex
 	writeQueue chan writeRequest
 	wg         sync.WaitGroup
@@ -47,7 +49,7 @@ func NewDiskManager(dbPath string) (*DiskManager, error) {
 
 	dm := &DiskManager{
 		dbFile:     file,
-		nextPage:   PageID(stat.Size() / int64(PageSize)),
+		nextPage:   resource_page.ResourcePageID(stat.Size() / int64(resource_page.PageSize)),
 		writeQueue: make(chan writeRequest, 2048), // Larger queue for batching
 		quit:       make(chan struct{}),
 	}
@@ -81,7 +83,7 @@ func (dm *DiskManager) runBatchWorker() {
 		for _, req := range buffer {
 			// Skip writing for marker requests (used by Flush)
 			if !req.isMarker {
-				offset := int64(req.pageID) * int64(PageSize)
+				offset := int64(req.pageID) * int64(resource_page.PageSize)
 				dm.dbFile.WriteAt(req.pageData, offset)
 			}
 			if req.done != nil {
@@ -128,7 +130,7 @@ func (dm *DiskManager) runBatchWorker() {
 }
 
 // WritePage validates size and queues the write
-func (dm *DiskManager) WritePage(pageID PageID, pageData []byte) error {
+func (dm *DiskManager) WritePage(pageID resource_page.ResourcePageID, pageData []byte) error {
 	dm.mu.RLock()
 	defer dm.mu.RUnlock()
 
@@ -137,12 +139,12 @@ func (dm *DiskManager) WritePage(pageID PageID, pageData []byte) error {
 	}
 
 	// Validate page size
-	if len(pageData) != PageSize {
+	if len(pageData) != resource_page.PageSize {
 		return errors.New("invalid page size")
 	}
 
 	// Still cloning to ensure memory safety while the page sits in the batch buffer
-	dataCopy := make([]byte, PageSize)
+	dataCopy := make([]byte, resource_page.PageSize)
 	copy(dataCopy, pageData)
 
 	dm.writeQueue <- writeRequest{

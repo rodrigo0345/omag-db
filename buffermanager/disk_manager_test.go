@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/rodrigo0345/omag/resource_page"
 )
 
 // TestNewDiskManager_Success tests successful disk manager creation
@@ -50,7 +52,7 @@ func TestNewDiskManager_ExistingFile(t *testing.T) {
 		t.Fatalf("failed to open file: %v", err)
 	}
 	// Write 2 pages worth of data
-	data := make([]byte, PageSize*2)
+	data := make([]byte, resource_page.PageSize*2)
 	file.Write(data)
 	file.Close()
 
