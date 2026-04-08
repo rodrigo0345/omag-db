@@ -44,7 +44,7 @@ func NewDatabaseTUI() (*DatabaseTUI, error) {
 	}
 
 	// Storage Engine (pure - no transaction awareness)
-	storageEngine, err := btree.NewBPlusTreeBackend(bufferPool)
+	storageEngine, err := btree.NewBPlusTreeBackendWithDisk(bufferPool, diskMgr)
 	if err != nil {
 		return nil, fmt.Errorf("storage engine: %w", err)
 	}
@@ -77,6 +77,13 @@ func NewDatabaseTUI() (*DatabaseTUI, error) {
 }
 
 func (db *DatabaseTUI) Close() error {
+	// Save metadata before closing
+	if engine, ok := db.storageEngine.(*btree.BPlusTreeBackend); ok {
+		if err := engine.SaveMetadataToDisk(); err != nil {
+			fmt.Printf("Warning: SaveMetadataToDisk: %v\n", err)
+		}
+	}
+
 	if err := db.isolationMgr.Close(); err != nil {
 		fmt.Printf("Warning: isolationMgr.Close: %v\n", err)
 	}
@@ -142,11 +149,62 @@ func (db *DatabaseTUI) del(key string) error {
 	return nil
 }
 
+// List all key-value pairs
+func (db *DatabaseTUI) list() error {
+	engine, ok := db.storageEngine.(*btree.BPlusTreeBackend)
+	if !ok {
+		return fmt.Errorf("storage engine is not BPlusTreeBackend")
+	}
+
+	results, err := engine.Scan()
+	if err != nil {
+		return fmt.Errorf("scan failed: %w", err)
+	}
+
+	if len(results) == 0 {
+		fmt.Println("Database is empty")
+		return nil
+	}
+
+	fmt.Printf("=== All Keys (%d entries) ===\n", len(results))
+	for i, entry := range results {
+		fmt.Printf("%d. %s = %s\n", i+1, string(entry.Key), string(entry.Value))
+	}
+	fmt.Println()
+	return nil
+}
+
+// Show database statistics
+func (db *DatabaseTUI) stats() error {
+	engine, ok := db.storageEngine.(*btree.BPlusTreeBackend)
+	if !ok {
+		return fmt.Errorf("storage engine is not BPlusTreeBackend")
+	}
+
+	fileSize, err := db.diskMgr.GetFileSize()
+	if err != nil {
+		return fmt.Errorf("get file size failed: %w", err)
+	}
+
+	results, err := engine.Scan()
+	if err != nil {
+		return fmt.Errorf("scan failed: %w", err)
+	}
+
+	fmt.Println("\n=== Database Statistics ===")
+	fmt.Printf("File Size: %d bytes (%.2f MB)\n", fileSize, float64(fileSize)/1024/1024)
+	fmt.Printf("Total Entries: %d\n", len(results))
+	fmt.Printf("Page Size: 4096 bytes\n")
+	fmt.Printf("Allocated Pages: %d\n", fileSize/4096)
+	fmt.Println()
+	return nil
+}
+
 func (db *DatabaseTUI) Run() {
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("\n=== OMAG Database (2PL + BTree) ===")
-	fmt.Println("Commands: set <key> <val>, get <key>, del <key>, exit")
+	fmt.Println("Commands: set <key> <val>, get <key>, del <key>, list, stats, exit")
 	fmt.Println()
 
 	for {
@@ -191,6 +249,16 @@ func (db *DatabaseTUI) Run() {
 				fmt.Printf("✗ Error: %v\n", err)
 			}
 
+		case "list":
+			if err := db.list(); err != nil {
+				fmt.Printf("✗ Error: %v\n", err)
+			}
+
+		case "stats":
+			if err := db.stats(); err != nil {
+				fmt.Printf("✗ Error: %v\n", err)
+			}
+
 		case "exit", "quit":
 			fmt.Println("Closing database...")
 			if err := db.Close(); err != nil {
@@ -199,7 +267,7 @@ func (db *DatabaseTUI) Run() {
 			return
 
 		default:
-			fmt.Println("Unknown command. Try: set, get, del, exit")
+			fmt.Println("Unknown command. Try: set, get, del, list, stats, exit")
 		}
 	}
 }

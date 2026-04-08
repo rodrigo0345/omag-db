@@ -218,6 +218,23 @@ func (dm *DiskManager) Close() error {
 	return nil
 }
 
+// GetFileSize returns the current size of the database file in bytes
+func (dm *DiskManager) GetFileSize() (int64, error) {
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+
+	if dm.dbFile == nil {
+		return 0, ErrDiskManagerClosed
+	}
+
+	stat, err := dm.dbFile.Stat()
+	if err != nil {
+		return 0, err
+	}
+
+	return stat.Size(), nil
+}
+
 // Flush waits for all pending writes to be written to disk
 func (dm *DiskManager) Flush() error {
 	dm.mu.RLock()

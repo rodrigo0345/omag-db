@@ -9,18 +9,82 @@ import (
 
 type BPlusTreeBackend struct {
 	bufferManager buffer.IBufferPoolManager
-	meta          *MetaLogicPage
+	diskManager   interface {
+		WritePage(pageID page.ResourcePageID, pageData []byte) error
+		ReadPage(pageID page.ResourcePageID, pageData []byte) error
+	}
+	meta *MetaLogicPage
 }
 
-// NewBPlusTreeBackend creates a new B+ tree storage engine
+// NewBPlusTreeBackendWithDisk creates a new B+ tree storage engine with disk manager
+func NewBPlusTreeBackendWithDisk(
+	bufferMgr buffer.IBufferPoolManager,
+	diskMgr interface {
+		WritePage(pageID page.ResourcePageID, pageData []byte) error
+		ReadPage(pageID page.ResourcePageID, pageData []byte) error
+	},
+) (*BPlusTreeBackend, error) {
+	// Create in-memory meta page
+	meta := NewMetaPage()
+
+	backend := &BPlusTreeBackend{
+		bufferManager: bufferMgr,
+		diskManager:   diskMgr,
+		meta:          meta,
+	}
+
+	// Try to load metadata from disk (page 0) if it exists
+	if err := backend.LoadMetadataFromDisk(); err != nil {
+		// If loading fails, that's OK - we'll use default metadata
+		// This happens on first run when page 0 doesn't exist yet
+	}
+
+	return backend, nil
+}
+
+// NewBPlusTreeBackend creates a new B+ tree storage engine (legacy - no persistence)
 func NewBPlusTreeBackend(bufferMgr buffer.IBufferPoolManager) (*BPlusTreeBackend, error) {
-	// Create meta page (first page in tree)
+	// Create in-memory meta page
 	meta := NewMetaPage()
 
 	return &BPlusTreeBackend{
 		bufferManager: bufferMgr,
+		diskManager:   nil,
 		meta:          meta,
 	}, nil
+}
+
+// LoadMetadataFromDisk loads the metadata from disk page 0 if it exists
+func (b *BPlusTreeBackend) LoadMetadataFromDisk() error {
+	if b.diskManager == nil {
+		return nil // No disk manager, skip loading
+	}
+
+	// Try to read page 0 from disk
+	pageData := make([]byte, 4096) // Default page size
+	err := b.diskManager.ReadPage(page.ResourcePageID(0), pageData)
+	if err != nil {
+		// Page 0 doesn't exist yet - that's OK for first run
+		return nil
+	}
+
+	// Validate it's a meta page by checking magic number
+	loadedMeta := &MetaLogicPage{data: pageData}
+	if loadedMeta.MagicNumber() == MagicNumber {
+		b.meta = loadedMeta
+	}
+
+	return nil
+}
+
+// SaveMetadataToDisk persists the metadata to disk page 0
+func (b *BPlusTreeBackend) SaveMetadataToDisk() error {
+	if b.diskManager == nil {
+		return nil // No disk manager, skip saving
+	}
+
+	// Write metadata to page 0
+	return b.diskManager.WritePage(page.ResourcePageID(0), b.meta.data)
 }
 
 // initializeRoot creates the first root page (a leaf page)
@@ -169,4 +233,41 @@ func (b *BPlusTreeBackend) Delete(key []byte) error {
 		return err
 	}
 	return nil
+}
+
+// Scan returns all key-value pairs in the tree
+func (b *BPlusTreeBackend) Scan() ([]struct{ Key, Value []byte }, error) {
+	var results []struct{ Key, Value []byte }
+
+	rootID := b.meta.RootPage()
+	if rootID == 0 {
+		return results, nil // Empty tree
+	}
+
+	// Pin the root page
+	rootPage, err := b.bufferManager.PinPage(page.ResourcePageID(rootID))
+	if err != nil {
+		return nil, err
+	}
+	defer b.bufferManager.UnpinPage(page.ResourcePageID(rootID), false)
+
+	// Read as leaf page and scan all cells
+	rootPage.RLock()
+	leaf := &LeafLogicPage{data: rootPage.GetData()}
+	cellCount := leaf.CellCount()
+
+	for i := uint16(0); i < cellCount; i++ {
+		offset := leaf.GetCellOffset(i)
+		cell := leaf.GetCell(offset)
+		// Only include non-deleted entries (deleted entries have empty values)
+		if len(cell.Value) > 0 {
+			results = append(results, struct{ Key, Value []byte }{
+				Key:   cell.Key,
+				Value: cell.Value,
+			})
+		}
+	}
+	rootPage.RUnlock()
+
+	return results, nil
 }
