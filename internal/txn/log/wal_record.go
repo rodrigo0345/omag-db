@@ -1,9 +1,9 @@
-package logmanager
+package log
 
 import (
 	"fmt"
 
-	"github.com/rodrigo0345/omag/resource_page"
+	"github.com/rodrigo0345/omag/internal/storage/page"
 )
 
 // WALRecord represents a single entry in the Write-Ahead Log
@@ -13,14 +13,14 @@ type WALRecord struct {
 	PrevLSN uint64                       // LSN of the previous record for this transaction (enables efficient backward walking)
 	TxnID   uint64                       // Transaction ID of the transaction that generated this record
 	Type    RecordType                   // Type of record (UPDATE, COMMIT, ABORT, or CHECKPOINT)
-	PageID  resource_page.ResourcePageID // Page affected by this record (only meaningful for UPDATE records)
+	PageID  page.ResourcePageID // Page affected by this record (only meaningful for UPDATE records)
 	Offset  uint16                       // Offset within the page where the update occurred
 	PageLSN uint64                       // LSN of the last log record that modified this page (for idempotency checking)
 	Before  []byte                       // Before image (used for undo during rollback)
 	After   []byte                       // After image (used for redo during recovery)
 }
 
-func NewWALRecord(lsn, prevLSN, txnID uint64, recordType RecordType, pageID resource_page.ResourcePageID, offset uint16, pageLSN uint64, before, after []byte) WALRecord {
+func NewWALRecord(lsn, prevLSN, txnID uint64, recordType RecordType, pageID page.ResourcePageID, offset uint16, pageLSN uint64, before, after []byte) WALRecord {
 	return WALRecord{
 		LSN:     lsn,
 		PrevLSN: prevLSN,
@@ -55,7 +55,7 @@ func (rec WALRecord) GetType() RecordType {
 	return rec.Type
 }
 
-func (rec WALRecord) GetPageID() resource_page.ResourcePageID {
+func (rec WALRecord) GetPageID() page.ResourcePageID {
 	return rec.PageID
 }
 
@@ -91,7 +91,7 @@ func (rec *WALRecord) SetType(recordType RecordType) {
 	rec.Type = recordType
 }
 
-func (rec *WALRecord) SetPageID(pageID resource_page.ResourcePageID) {
+func (rec *WALRecord) SetPageID(pageID page.ResourcePageID) {
 	rec.PageID = pageID
 }
 

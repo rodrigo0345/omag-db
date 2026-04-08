@@ -1,4 +1,4 @@
-package logmanager
+package log
 
 type LSN uint64
 

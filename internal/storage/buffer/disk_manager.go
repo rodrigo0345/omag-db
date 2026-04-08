@@ -1,4 +1,4 @@
-package buffermanager
+package buffer
 
 import (
 	"errors"
@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rodrigo0345/omag/resource_page"
+	"github.com/rodrigo0345/omag/internal/storage/page"
 )
 
 var (
@@ -20,7 +20,7 @@ const (
 )
 
 type writeRequest struct {
-	pageID   resource_page.ResourcePageID
+	pageID   page.ResourcePageID
 	pageData []byte
 	done     chan struct{} // Used for synchronization in Flush
 	isMarker bool          // True if this is a flush marker, not a real write
@@ -28,7 +28,7 @@ type writeRequest struct {
 
 type DiskManager struct {
 	dbFile     *os.File
-	nextPage   resource_page.ResourcePageID
+	nextPage   page.ResourcePageID
 	mu         sync.RWMutex
 	writeQueue chan writeRequest
 	wg         sync.WaitGroup
@@ -49,9 +49,14 @@ func NewDiskManager(dbPath string) (*DiskManager, error) {
 
 	dm := &DiskManager{
 		dbFile:     file,
-		nextPage:   resource_page.ResourcePageID(stat.Size() / int64(resource_page.PageSize)),
+		nextPage:   page.ResourcePageID(stat.Size() / int64(page.PageSize)),
 		writeQueue: make(chan writeRequest, 2048), // Larger queue for batching
 		quit:       make(chan struct{}),
+	}
+
+	// If it's a new file, start at page 1 (page 0 is reserved for metadata)
+	if stat.Size() == 0 {
+		dm.nextPage = 1
 	}
 
 	dm.wg.Add(1)
@@ -83,7 +88,7 @@ func (dm *DiskManager) runBatchWorker() {
 		for _, req := range buffer {
 			// Skip writing for marker requests (used by Flush)
 			if !req.isMarker {
-				offset := int64(req.pageID) * int64(resource_page.PageSize)
+				offset := int64(req.pageID) * int64(page.PageSize)
 				dm.dbFile.WriteAt(req.pageData, offset)
 			}
 			if req.done != nil {
@@ -130,7 +135,7 @@ func (dm *DiskManager) runBatchWorker() {
 }
 
 // WritePage validates size and queues the write
-func (dm *DiskManager) WritePage(pageID resource_page.ResourcePageID, pageData []byte) error {
+func (dm *DiskManager) WritePage(pageID page.ResourcePageID, pageData []byte) error {
 	dm.mu.RLock()
 	defer dm.mu.RUnlock()
 
@@ -139,12 +144,12 @@ func (dm *DiskManager) WritePage(pageID resource_page.ResourcePageID, pageData [
 	}
 
 	// Validate page size
-	if len(pageData) != resource_page.PageSize {
+	if len(pageData) != page.PageSize {
 		return errors.New("invalid page size")
 	}
 
 	// Still cloning to ensure memory safety while the page sits in the batch buffer
-	dataCopy := make([]byte, resource_page.PageSize)
+	dataCopy := make([]byte, page.PageSize)
 	copy(dataCopy, pageData)
 
 	dm.writeQueue <- writeRequest{
@@ -157,7 +162,7 @@ func (dm *DiskManager) WritePage(pageID resource_page.ResourcePageID, pageData [
 }
 
 // ReadPage uses ReadAt to remain compatible with the stateless model
-func (dm *DiskManager) ReadPage(pageID resource_page.ResourcePageID, pageData []byte) error {
+func (dm *DiskManager) ReadPage(pageID page.ResourcePageID, pageData []byte) error {
 	dm.mu.RLock()
 	defer dm.mu.RUnlock()
 
@@ -166,7 +171,7 @@ func (dm *DiskManager) ReadPage(pageID resource_page.ResourcePageID, pageData []
 	}
 
 	// calculate the offset and read the page data directly into the provided pageData buffer
-	offset := int64(pageID) * int64(resource_page.PageSize)
+	offset := int64(pageID) * int64(page.PageSize)
 
 	// read up until len(pageData)
 	_, err := dm.dbFile.ReadAt(pageData, offset)
@@ -177,7 +182,7 @@ func (dm *DiskManager) ReadPage(pageID resource_page.ResourcePageID, pageData []
 	return nil
 }
 
-func (dm *DiskManager) AllocatePage() resource_page.ResourcePageID {
+func (dm *DiskManager) AllocatePage() page.ResourcePageID {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
@@ -226,7 +231,7 @@ func (dm *DiskManager) Flush() error {
 	done := make(chan struct{})
 	dm.writeQueue <- writeRequest{
 		pageID:   0,
-		pageData: make([]byte, resource_page.PageSize), // Empty/dummy data
+		pageData: make([]byte, page.PageSize), // Empty/dummy data
 		done:     done,
 		isMarker: true, // This is a flush marker, don't actually write it
 	}

@@ -1,14 +1,14 @@
-package transaction_manager
+package txn
 
 import (
-	"github.com/rodrigo0345/omag/buffermanager"
-	"github.com/rodrigo0345/omag/logmanager"
+	"github.com/rodrigo0345/omag/internal/storage/buffer"
+	"github.com/rodrigo0345/omag/internal/txn/log"
 )
 
 type TransactionManager struct {
 	isolationManager  IIsolationManager
-	logManager        logmanager.ILogManager
-	bufferPoolManager buffermanager.IBufferPoolManager
+	logManager        log.ILogManager
+	bufferPoolManager buffer.IBufferPoolManager
 	rollbackManager   *RollbackManager // Coordinates undo/rollback
 	writeHandler      WriteHandler     // Coordinates writes/WAL/undo
 	// indexManager      IIndexManager       - vai conter o primary e secondary index
@@ -17,8 +17,8 @@ type TransactionManager struct {
 // NewTransactionManager creates a new transaction manager with all components
 func NewTransactionManager(
 	isolationMgr IIsolationManager,
-	logMgr logmanager.ILogManager,
-	bufferMgr buffermanager.IBufferPoolManager,
+	logMgr log.ILogManager,
+	bufferMgr buffer.IBufferPoolManager,
 	storage StorageEngine,
 ) *TransactionManager {
 	rollbackMgr := NewRollbackManager(bufferMgr)
@@ -39,19 +39,6 @@ func NewTransactionManager(
 		bufferPoolManager: bufferMgr,
 		rollbackManager:   rollbackMgr,
 		writeHandler:      writeHandler,
-	}
-}
-
-func (tm *TransactionManager) ForceWALPushOnCommit() bool {
-	switch tm.isolationManager.(type) {
-	case *TwoPhaseLockingManager:
-		return true
-	case *OptimisticConcurrencyControlManager:
-		return true
-	case *MVCCManager:
-		return false
-	default:
-		panic("unknown isolation manager type")
 	}
 }
 

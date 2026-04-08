@@ -1,4 +1,4 @@
-package logmanager
+package log
 
 import (
 	"encoding/binary"
@@ -7,7 +7,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/rodrigo0345/omag/resource_page"
+	"github.com/rodrigo0345/omag/internal/storage/page"
 )
 
 // RecordType defines the type of WAL record following ARIES conventions
@@ -23,7 +23,7 @@ const (
 // DirtyPageTable (DPT) maps PageID to its RedoLSN
 // RedoLSN is the LSN of the first log record that modified this page after the last checkpoint
 // ARIES builds this table during the Analysis phase
-type DirtyPageTable map[resource_page.ResourcePageID]uint64
+type DirtyPageTable map[page.ResourcePageID]uint64
 
 // ActiveTransactionTable (ATT) maps TxnID to information about active transactions
 // Used during checkpoint and recovery to track which transactions were active
@@ -45,7 +45,7 @@ type RecoveryState struct {
 	// Committed and Aborted transaction sets
 	CommittedTxns map[uint64]bool                         // Set of transaction IDs that committed
 	AbortedTxns   map[uint64]bool                         // Set of transaction IDs that need undo during recovery
-	PageStates    map[resource_page.ResourcePageID][]byte // Final page states after recovery (maps PageID to final PageLSN)
+	PageStates    map[page.ResourcePageID][]byte // Final page states after recovery (maps PageID to final PageLSN)
 
 	// Recovery metadata
 	CheckpointMetadata *CheckpointMetadata
@@ -74,7 +74,7 @@ type WALManager struct {
 	// Transaction state tracking
 	activeTxns   map[uint64]bool                         // Map of active transaction IDs
 	txnLastLSN   map[uint64]uint64                       // Map of TxnID to last LSN (for PrevLSN calculation)
-	pageVersions map[resource_page.ResourcePageID]uint64 // Map of PageID to its current PageLSN (for idempotency)
+	pageVersions map[page.ResourcePageID]uint64 // Map of PageID to its current PageLSN (for idempotency)
 }
 
 // NewWALManager creates and initializes a new WAL manager
@@ -92,7 +92,7 @@ func NewWALManager(filePath string) (ILogManager, error) {
 		lastCheckpointATT: make(ActiveTransactionTable),
 		activeTxns:        make(map[uint64]bool),
 		txnLastLSN:        make(map[uint64]uint64),
-		pageVersions:      make(map[resource_page.ResourcePageID]uint64),
+		pageVersions:      make(map[page.ResourcePageID]uint64),
 	}, nil
 }
 
@@ -204,7 +204,7 @@ func (wm *WALManager) deserializeWALRecord(reader io.Reader) (*WALRecord, error)
 	rec.PrevLSN = binary.LittleEndian.Uint64(header[8:16])
 	rec.TxnID = binary.LittleEndian.Uint64(header[16:24])
 	rec.Type = RecordType(header[24])
-	rec.PageID = resource_page.ResourcePageID(binary.LittleEndian.Uint32(header[25:29]))
+	rec.PageID = page.ResourcePageID(binary.LittleEndian.Uint32(header[25:29]))
 	rec.Offset = binary.LittleEndian.Uint16(header[29:31])
 	rec.PageLSN = binary.LittleEndian.Uint64(header[31:39])
 
@@ -258,7 +258,7 @@ func (wm *WALManager) Recover() (*RecoveryState, error) {
 	state := &RecoveryState{
 		CommittedTxns: make(map[uint64]bool),
 		AbortedTxns:   make(map[uint64]bool),
-		PageStates:    make(map[resource_page.ResourcePageID][]byte),
+		PageStates:    make(map[page.ResourcePageID][]byte),
 		DirtyPages:    make(DirtyPageTable),
 		UndoList:      make([]*WALRecord, 0),
 		TobeRedone:    make(map[uint64][]uint64),
@@ -355,7 +355,7 @@ func (wm *WALManager) redoPhase(file *os.File, state *RecoveryState) error {
 	file.Seek(0, 0)
 
 	// Track the current PageLSN for idempotency checking
-	pageCurrentLSN := make(map[resource_page.ResourcePageID]uint64)
+	pageCurrentLSN := make(map[page.ResourcePageID]uint64)
 
 	for {
 		rec, err := wm.deserializeWALRecord(file)
@@ -541,11 +541,11 @@ func (wm *WALManager) GetLastCheckpointLSN() uint64 {
 
 // GetDirtyPages returns a copy of the current dirty page table
 // Maps PageID to its RedoLSN
-func (wm *WALManager) GetDirtyPages() map[resource_page.ResourcePageID]uint64 {
+func (wm *WALManager) GetDirtyPages() map[page.ResourcePageID]uint64 {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
-	pages := make(map[resource_page.ResourcePageID]uint64)
+	pages := make(map[page.ResourcePageID]uint64)
 
 	for k, v := range wm.lastCheckpointDPT {
 		pages[k] = v

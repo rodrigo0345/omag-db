@@ -1,11 +1,11 @@
-package buffermanager
+package buffer
 
 import (
 	"errors"
 	"sync"
 
-	"github.com/rodrigo0345/omag/replacer"
-	"github.com/rodrigo0345/omag/resource_page"
+	"github.com/rodrigo0345/omag/internal/concurrency"
+	"github.com/rodrigo0345/omag/internal/storage/page"
 )
 
 var (
@@ -29,17 +29,17 @@ type WALFlusher interface {
 
 type BufferPoolManager struct {
 	poolSize        int
-	frames          []resource_page.IResourcePage                     // actual cache buffer with configurable replacement policy
-	pageTable       map[resource_page.ResourcePageID]replacer.FrameID // logical PageID to physical FrameID mapping
-	freeList        []replacer.FrameID
+	frames          []page.IResourcePage                     // actual cache buffer with configurable replacement policy
+	pageTable       map[page.ResourcePageID]concurrency.FrameID // logical PageID to physical FrameID mapping
+	freeList        []concurrency.FrameID
 	diskManager     *DiskManager
-	replacerManager replacer.IReplacer
+	replacerManager concurrency.IReplacer
 	walMgr          interface{}
 	mu              sync.Mutex
 }
 
 func NewBufferPoolManager(poolSize int, diskManager *DiskManager) *BufferPoolManager {
-	defaultReplacerPolicy := replacer.NewClockReplacer(poolSize)
+	defaultReplacerPolicy := concurrency.NewClockReplacer(poolSize)
 	return NewBufferPoolManagerWithReplacer(poolSize, diskManager, defaultReplacerPolicy)
 }
 
@@ -47,19 +47,19 @@ func NewBufferPoolManager(poolSize int, diskManager *DiskManager) *BufferPoolMan
 func NewBufferPoolManagerWithReplacer(
 	poolSize int,
 	diskManager *DiskManager,
-	replacerManager replacer.IReplacer) *BufferPoolManager {
-	frames := make([]resource_page.IResourcePage, poolSize)
-	freeList := make([]replacer.FrameID, poolSize)
+	replacerManager concurrency.IReplacer) *BufferPoolManager {
+	frames := make([]page.IResourcePage, poolSize)
+	freeList := make([]concurrency.FrameID, poolSize)
 
 	for i := 0; i < poolSize; i++ {
-		frames[i] = resource_page.NewResourcePage(resource_page.ResourcePageID(i))
-		freeList[i] = replacer.FrameID(i)
+		frames[i] = page.NewResourcePage(page.ResourcePageID(i))
+		freeList[i] = concurrency.FrameID(i)
 	}
 
 	return &BufferPoolManager{
 		poolSize:        poolSize,
 		frames:          frames,
-		pageTable:       make(map[resource_page.ResourcePageID]replacer.FrameID),
+		pageTable:       make(map[page.ResourcePageID]concurrency.FrameID),
 		freeList:        freeList,
 		diskManager:     diskManager,
 		replacerManager: replacerManager,
@@ -74,7 +74,7 @@ func (bpm *BufferPoolManager) SetWALManager(walMgr interface{}) {
 
 // flushPageInternal handles the WAL protocol + Disk I/O sequence.
 // bpm.mu MUST be held when calling this.
-func (bpm *BufferPoolManager) flushPageInternal(page resource_page.IResourcePage) error {
+func (bpm *BufferPoolManager) flushPageInternal(page page.IResourcePage) error {
 
 	// if the page is not dirty, we can skip the flush
 	if !page.IsDirty() {
@@ -100,14 +100,14 @@ func (bpm *BufferPoolManager) flushPageInternal(page resource_page.IResourcePage
 }
 
 // can be thought of as the "fetch page" operation
-func (bpm *BufferPoolManager) PinPage(pageID resource_page.ResourcePageID) (resource_page.IResourcePage, error) {
+func (bpm *BufferPoolManager) PinPage(pageID page.ResourcePageID) (page.IResourcePage, error) {
 	bpm.mu.Lock()
 
 	// if the page is already in the buffer pool, just pin and return it
 	if frameID, exists := bpm.pageTable[pageID]; exists {
 		frame := bpm.frames[frameID]
 		frame.SetPinCount(frame.GetPinCount() + 1)
-		bpm.replacerManager.Pin(replacer.FrameID(frameID))
+		bpm.replacerManager.Pin(concurrency.FrameID(frameID))
 		bpm.mu.Unlock()
 		return frame, nil
 	}
@@ -128,13 +128,13 @@ func (bpm *BufferPoolManager) PinPage(pageID resource_page.ResourcePageID) (reso
 	}
 
 	bpm.pageTable[pageID] = frameID
-	bpm.replacerManager.Pin(replacer.FrameID(frameID))
+	bpm.replacerManager.Pin(concurrency.FrameID(frameID))
 
 	bpm.mu.Unlock()
 	return frame, nil
 }
 
-func (bpm *BufferPoolManager) UnpinPage(pageID resource_page.ResourcePageID, isDirty bool) error {
+func (bpm *BufferPoolManager) UnpinPage(pageID page.ResourcePageID, isDirty bool) error {
 	bpm.mu.Lock()
 	defer bpm.mu.Unlock()
 
@@ -153,13 +153,13 @@ func (bpm *BufferPoolManager) UnpinPage(pageID resource_page.ResourcePageID, isD
 	}
 
 	if frame.GetPinCount() == 0 {
-		bpm.replacerManager.Unpin(replacer.FrameID(frameID))
+		bpm.replacerManager.Unpin(concurrency.FrameID(frameID))
 	}
 
 	return nil
 }
 
-func (bpm *BufferPoolManager) NewPage() (resource_page.IResourcePage, error) {
+func (bpm *BufferPoolManager) NewPage() (*page.IResourcePage, error) {
 	bpm.mu.Lock()
 
 	pageID := bpm.diskManager.AllocatePage()
@@ -177,10 +177,10 @@ func (bpm *BufferPoolManager) NewPage() (resource_page.IResourcePage, error) {
 	bpm.replacerManager.Pin(frameID)
 
 	bpm.mu.Unlock()
-	return frame, nil
+	return &frame, nil
 }
 
-func (bpm *BufferPoolManager) FlushPage(pageID resource_page.ResourcePageID) error {
+func (bpm *BufferPoolManager) FlushPage(pageID page.ResourcePageID) error {
 	bpm.mu.Lock()
 	defer bpm.mu.Unlock()
 
@@ -218,7 +218,7 @@ func (bpm *BufferPoolManager) Close() error {
 }
 
 // getAvailableFrameIDLocked finds a free frame or evicts a victim using the WAL protocol.
-func (bpm *BufferPoolManager) getAvailableFrameIDLocked() (replacer.FrameID, error) {
+func (bpm *BufferPoolManager) getAvailableFrameIDLocked() (concurrency.FrameID, error) {
 
 	// check if there is already a free frame
 	if len(bpm.freeList) > 0 {

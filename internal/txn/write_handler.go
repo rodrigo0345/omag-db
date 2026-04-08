@@ -1,11 +1,11 @@
-package transaction_manager
+package txn
 
 import (
 	"fmt"
 
-	"github.com/rodrigo0345/omag/buffermanager"
-	"github.com/rodrigo0345/omag/logmanager"
-	"github.com/rodrigo0345/omag/resource_page"
+	"github.com/rodrigo0345/omag/internal/storage/buffer"
+	"github.com/rodrigo0345/omag/internal/storage/page"
+	"github.com/rodrigo0345/omag/internal/txn/log"
 )
 
 // WriteOperation represents a write request to the storage engine
@@ -13,7 +13,7 @@ import (
 type WriteOperation struct {
 	Key      []byte
 	Value    []byte
-	PageID   resource_page.ResourcePageID
+	PageID   page.ResourcePageID
 	Offset   uint16
 	IsDelete bool
 }
@@ -33,8 +33,8 @@ type WriteHandler interface {
 type DefaultWriteHandler struct {
 	storageEngine   StorageEngine
 	rollbackManager *RollbackManager
-	logManager      logmanager.ILogManager // nil for non-WAL systems
-	bufferManager   buffermanager.IBufferPoolManager
+	logManager      log.ILogManager // nil for non-WAL systems
+	bufferManager   buffer.IBufferPoolManager
 }
 
 // StorageEngine is the interface for pure storage operations (no logging/transactions)
@@ -54,8 +54,8 @@ type StorageEngine interface {
 func NewDefaultWriteHandler(
 	storage StorageEngine,
 	rollbackMgr *RollbackManager,
-	bufferMgr buffermanager.IBufferPoolManager,
-	logMgr logmanager.ILogManager,
+	bufferMgr buffer.IBufferPoolManager,
+	logMgr log.ILogManager,
 ) *DefaultWriteHandler {
 	return &DefaultWriteHandler{
 		storageEngine:   storage,
@@ -94,9 +94,9 @@ func (dh *DefaultWriteHandler) HandleWrite(txn *Transaction, writeOp WriteOperat
 	// Step 2: (Optional) Write to WAL BEFORE execution
 	// This ensures durability: crash can recover from the WAL record
 	if dh.logManager != nil {
-		walRecord := logmanager.WALRecord{
+		walRecord := &log.WALRecord{
 			TxnID:  txn.GetID(),
-			Type:   logmanager.UPDATE,
+			Type:   log.UPDATE,
 			PageID: writeOp.PageID,
 			Before: beforeImage,
 			After:  writeOp.Value,
@@ -149,16 +149,16 @@ func (dh *DefaultWriteHandler) GetStorageEngine() StorageEngine {
 // but may still want to log for recovery
 type MVCCWriteHandler struct {
 	storageEngine StorageEngine
-	logManager    logmanager.ILogManager // nil if no WAL needed
-	bufferManager buffermanager.IBufferPoolManager
+	logManager    log.ILogManager // nil if no WAL needed
+	bufferManager buffer.IBufferPoolManager
 }
 
 // NewMVCCWriteHandler creates a write handler for MVCC systems
 // MVCC systems typically don't use the undo log during normal operation
 func NewMVCCWriteHandler(
 	storage StorageEngine,
-	bufferMgr buffermanager.IBufferPoolManager,
-	logMgr logmanager.ILogManager,
+	bufferMgr buffer.IBufferPoolManager,
+	logMgr log.ILogManager,
 ) *MVCCWriteHandler {
 	return &MVCCWriteHandler{
 		storageEngine: storage,
@@ -177,9 +177,9 @@ func (mh *MVCCWriteHandler) HandleWrite(txn *Transaction, writeOp WriteOperation
 	// Still want to log for recovery/durability if configured
 	if mh.logManager != nil {
 		beforeImage, _ := mh.storageEngine.Get(writeOp.Key)
-		walRecord := logmanager.WALRecord{
+		walRecord := log.WALRecord{
 			TxnID:  txn.GetID(),
-			Type:   logmanager.UPDATE,
+			Type:   log.UPDATE,
 			PageID: writeOp.PageID,
 			Before: beforeImage,
 			After:  writeOp.Value,

@@ -1,17 +1,17 @@
-package transaction_manager
+package undo
 
 import (
 	"fmt"
 
-	"github.com/rodrigo0345/omag/buffermanager"
-	"github.com/rodrigo0345/omag/resource_page"
+	"github.com/rodrigo0345/omag/internal/storage/buffer"
+	"github.com/rodrigo0345/omag/internal/storage/page"
 )
 
 // Operation represents a reversible database operation
 // Implementations must be safe for concurrent Undo() calls
 type Operation interface {
 	// Undo reverts this operation to its previous state
-	Undo(bufferMgr buffermanager.IBufferPoolManager) error
+	Undo(bufferMgr buffer.IBufferPoolManager) error
 
 	// GetID returns unique operation identifier
 	GetID() uint64
@@ -21,13 +21,13 @@ type Operation interface {
 // Stores before-image data to restore page state on abort
 type PageWriteOp struct {
 	opID       uint64
-	pageID     resource_page.ResourcePageID
+	pageID     page.ResourcePageID
 	offset     uint16
 	beforeData []byte
 }
 
 // NewPageWriteOp creates a page write operation with before-image
-func NewPageWriteOp(opID uint64, pageID resource_page.ResourcePageID, offset uint16, beforeData []byte) *PageWriteOp {
+func NewPageWriteOp(opID uint64, pageID page.ResourcePageID, offset uint16, beforeData []byte) *PageWriteOp {
 	// Copy to avoid external mutations
 	dataCopy := make([]byte, len(beforeData))
 	copy(dataCopy, beforeData)
@@ -41,8 +41,8 @@ func NewPageWriteOp(opID uint64, pageID resource_page.ResourcePageID, offset uin
 }
 
 // Undo restores the page to its pre-write state
-func (op *PageWriteOp) Undo(bufferMgr buffermanager.IBufferPoolManager) error {
-	page, err := bufferMgr.FetchPage(op.pageID)
+func (op *PageWriteOp) Undo(bufferMgr buffer.IBufferPoolManager) error {
+	page, err := bufferMgr.PinPage(op.pageID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch page %d for undo: %w", op.pageID, err)
 	}
@@ -62,7 +62,7 @@ func (op *PageWriteOp) GetID() uint64 {
 	return op.opID
 }
 
-func (op *PageWriteOp) GetPageID() resource_page.ResourcePageID {
+func (op *PageWriteOp) GetPageID() page.ResourcePageID {
 	return op.pageID
 }
 
@@ -94,7 +94,7 @@ func NewCompositeOp(opID uint64, ops ...Operation) *CompositeOp {
 }
 
 // Undo reverts all child operations in reverse order
-func (cop *CompositeOp) Undo(bufferMgr buffermanager.IBufferPoolManager) error {
+func (cop *CompositeOp) Undo(bufferMgr buffer.IBufferPoolManager) error {
 	for i := len(cop.operations) - 1; i >= 0; i-- {
 		op := cop.operations[i]
 		if err := op.Undo(bufferMgr); err != nil {

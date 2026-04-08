@@ -1,12 +1,12 @@
-package lsmtreebackend
+package lsm
 
 import (
-	"github.com/rodrigo0345/omag/buffermanager"
-	"github.com/rodrigo0345/omag/logmanager"
+	"github.com/rodrigo0345/omag/internal/storage/buffer"
+	"github.com/rodrigo0345/omag/internal/txn/log"
 )
 
 type LSMTreeBackend struct {
-	logManager logmanager.ILogManager
+	logManager    logmanager.ILogManager
 	bufferManager buffermanager.IBufferPoolManager
 }
 

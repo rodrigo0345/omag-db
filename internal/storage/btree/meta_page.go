@@ -1,4 +1,4 @@
-package bplus_tree_backend
+package btree
 
 import (
 	"encoding/binary"
@@ -37,7 +37,7 @@ func NewMetaPageWithSize(pageSize uint32) *MetaLogicPage {
 	m.SetMagicNumber(MagicNumber)
 	m.SetVersion(1)
 	m.SetPageSize(pageSize)
-	m.SetRootPage(1)
+	m.SetRootPage(0) // 0 means tree is empty, will be initialized on first put
 
 	return m
 }

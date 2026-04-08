@@ -1,11 +1,11 @@
-package buffermanager
+package buffer
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/rodrigo0345/omag/resource_page"
+	"github.com/rodrigo0345/omag/internal/storage/page"
 )
 
 // TestNewDiskManager_Success tests successful disk manager creation
@@ -52,7 +52,7 @@ func TestNewDiskManager_ExistingFile(t *testing.T) {
 		t.Fatalf("failed to open file: %v", err)
 	}
 	// Write 2 pages worth of data
-	data := make([]byte, resource_page.PageSize*2)
+	data := make([]byte, page.PageSize*2)
 	file.Write(data)
 	file.Close()
 
@@ -77,9 +77,9 @@ func TestReadPage_Success(t *testing.T) {
 	defer dm.Close()
 
 	// Write a test page first
-	testData := make([]byte, resource_page.PageSize)
+	testData := make([]byte, page.PageSize)
 	testData[0] = 42
-	testData[resource_page.PageSize-1] = 99
+	testData[page.PageSize-1] = 99
 
 	dm.WritePage(0, testData)
 
@@ -87,7 +87,7 @@ func TestReadPage_Success(t *testing.T) {
 	dm.Flush()
 
 	// Read it back
-	readData := make([]byte, resource_page.PageSize)
+	readData := make([]byte, page.PageSize)
 	err := dm.ReadPage(0, readData)
 	if err != nil {
 		t.Fatalf("failed to read page: %v", err)
@@ -96,8 +96,8 @@ func TestReadPage_Success(t *testing.T) {
 	if readData[0] != 42 {
 		t.Fatalf("expected readData[0] = 42, got %d", readData[0])
 	}
-	if readData[resource_page.PageSize-1] != 99 {
-		t.Fatalf("expected readData[resource_page.PageSize-1] = 99, got %d", readData[resource_page.PageSize-1])
+	if readData[page.PageSize-1] != 99 {
+		t.Fatalf("expected readData[page.PageSize-1] = 99, got %d", readData[page.PageSize-1])
 	}
 }
 
@@ -109,7 +109,7 @@ func TestReadPage_Closed(t *testing.T) {
 	dm, _ := NewDiskManager(dbFile)
 	dm.Close()
 
-	data := make([]byte, resource_page.PageSize)
+	data := make([]byte, page.PageSize)
 	err := dm.ReadPage(0, data)
 	if err == nil {
 		t.Fatal("expected error when reading from closed disk manager")
@@ -124,7 +124,7 @@ func TestWritePage_Success(t *testing.T) {
 	dm, _ := NewDiskManager(dbFile)
 	defer dm.Close()
 
-	testData := make([]byte, resource_page.PageSize)
+	testData := make([]byte, page.PageSize)
 	for i := range testData {
 		testData[i] = byte(i % 256)
 	}
@@ -145,8 +145,8 @@ func TestWritePage_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to stat file: %v", err)
 	}
-	if stat.Size() != resource_page.PageSize {
-		t.Fatalf("expected file size %d, got %d", resource_page.PageSize, stat.Size())
+	if stat.Size() != page.PageSize {
+		t.Fatalf("expected file size %d, got %d", page.PageSize, stat.Size())
 	}
 }
 
@@ -158,7 +158,7 @@ func TestWritePage_SizeMismatch(t *testing.T) {
 	dm, _ := NewDiskManager(dbFile)
 	defer dm.Close()
 
-	wrongData := make([]byte, resource_page.PageSize-1)
+	wrongData := make([]byte, page.PageSize-1)
 	err := dm.WritePage(0, wrongData)
 	if err == nil {
 		t.Fatal("expected error for size mismatch")
@@ -173,7 +173,7 @@ func TestWritePage_Closed(t *testing.T) {
 	dm, _ := NewDiskManager(dbFile)
 	dm.Close()
 
-	data := make([]byte, resource_page.PageSize)
+	data := make([]byte, page.PageSize)
 	err := dm.WritePage(0, data)
 	if err == nil {
 		t.Fatal("expected error when writing to closed disk manager")
@@ -212,7 +212,7 @@ func TestSync_Success(t *testing.T) {
 	dm, _ := NewDiskManager(dbFile)
 	defer dm.Close()
 
-	testData := make([]byte, resource_page.PageSize)
+	testData := make([]byte, page.PageSize)
 	testData[0] = 77
 	dm.WritePage(0, testData)
 
@@ -248,7 +248,7 @@ func TestClose_Success(t *testing.T) {
 	}
 
 	// File handle is closed (attempting operations will fail)
-	data := make([]byte, resource_page.PageSize)
+	data := make([]byte, page.PageSize)
 	err = dm.ReadPage(0, data)
 	if err == nil {
 		t.Fatal("expected error after close")
@@ -278,9 +278,9 @@ func TestMultiplePages(t *testing.T) {
 	// Write 5 pages
 	pages := 5
 	for i := 0; i < pages; i++ {
-		data := make([]byte, resource_page.PageSize)
+		data := make([]byte, page.PageSize)
 		data[0] = byte(i)
-		dm.WritePage(resource_page.ResourcePageID(i), data)
+		dm.WritePage(page.ResourcePageID(i), data)
 	}
 
 	// Flush to ensure all writes are on disk
@@ -288,8 +288,8 @@ func TestMultiplePages(t *testing.T) {
 
 	// Read them back and verify
 	for i := 0; i < pages; i++ {
-		data := make([]byte, resource_page.PageSize)
-		dm.ReadPage(resource_page.ResourcePageID(i), data)
+		data := make([]byte, page.PageSize)
+		dm.ReadPage(page.ResourcePageID(i), data)
 		if data[0] != byte(i) {
 			t.Fatalf("page %d: expected data[0]=%d, got %d", i, i, data[0])
 		}

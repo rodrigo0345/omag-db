@@ -1,10 +1,10 @@
-package transaction_manager
+package undo
 
 import (
 	"fmt"
 	"sync"
 
-	"github.com/rodrigo0345/omag/buffermanager"
+	"github.com/rodrigo0345/omag/internal/storage/buffer"
 )
 
 // UndoLog manages all reversible operations for a single transaction
@@ -38,7 +38,7 @@ func (ul *UndoLog) RecordOp(op Operation) error {
 
 // Rollback undoes all operations in reverse order (LIFO)
 // Clears operations after successful rollback
-func (ul *UndoLog) Rollback(bufferMgr buffermanager.IBufferPoolManager) error {
+func (ul *UndoLog) Rollback(bufferMgr buffer.IBufferPoolManager) error {
 	ul.mu.Lock()
 	defer ul.mu.Unlock()
 
@@ -55,7 +55,7 @@ func (ul *UndoLog) Rollback(bufferMgr buffermanager.IBufferPoolManager) error {
 }
 
 // RollbackToPoint undoes operations up to the given count (for savepoints)
-func (ul *UndoLog) RollbackToPoint(point int, bufferMgr buffermanager.IBufferPoolManager) error {
+func (ul *UndoLog) RollbackToPoint(point int, bufferMgr buffer.IBufferPoolManager) error {
 	ul.mu.Lock()
 	defer ul.mu.Unlock()
 

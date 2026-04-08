@@ -1,4 +1,4 @@
-package resource_page
+package page
 
 import "sync"
 

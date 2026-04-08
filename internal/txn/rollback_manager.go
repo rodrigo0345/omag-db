@@ -1,24 +1,25 @@
-package transaction_manager
+package txn
 
 import (
 	"fmt"
 	"sync"
 	"sync/atomic"
 
-	"github.com/rodrigo0345/omag/buffermanager"
-	"github.com/rodrigo0345/omag/resource_page"
+	"github.com/rodrigo0345/omag/internal/storage/buffer"
+	"github.com/rodrigo0345/omag/internal/storage/page"
+	"github.com/rodrigo0345/omag/internal/txn/undo"
 )
 
 // RollbackManager provides utilities for safe transaction rollback
 // Coordinates between isolation strategies and undo operations
 type RollbackManager struct {
-	bufferMgr buffermanager.IBufferPoolManager
+	bufferMgr buffer.IBufferPoolManager
 	nextOpID  uint64 // Atomic counter for operation IDs
 	mu        sync.RWMutex
 }
 
 // NewRollbackManager creates a manager for handling transaction rollbacks
-func NewRollbackManager(bufferMgr buffermanager.IBufferPoolManager) *RollbackManager {
+func NewRollbackManager(bufferMgr buffer.IBufferPoolManager) *RollbackManager {
 	return &RollbackManager{
 		bufferMgr: bufferMgr,
 		nextOpID:  1,
@@ -29,13 +30,13 @@ func NewRollbackManager(bufferMgr buffermanager.IBufferPoolManager) *RollbackMan
 // Returns the operation ID for reference
 func (rm *RollbackManager) RecordPageWrite(
 	txn *Transaction,
-	pageID resource_page.ResourcePageID,
+	pageID page.ResourcePageID,
 	offset uint16,
 	beforeData []byte,
 ) (uint64, error) {
 	opID := atomic.AddUint64(&rm.nextOpID, 1)
 
-	op := NewPageWriteOp(opID, pageID, offset, beforeData)
+	op := undo.NewPageWriteOp(opID, pageID, offset, beforeData)
 
 	if err := txn.RecordOperation(op); err != nil {
 		return 0, fmt.Errorf("failed to record page write operation: %w", err)

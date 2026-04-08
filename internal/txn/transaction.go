@@ -1,7 +1,8 @@
-package transaction_manager
+package txn
 
 import (
-	"github.com/rodrigo0345/omag/buffermanager"
+	"github.com/rodrigo0345/omag/internal/storage/buffer"
+	"github.com/rodrigo0345/omag/internal/txn/undo"
 )
 
 type TxnState int
@@ -12,12 +13,20 @@ const (
 	ABORTED
 )
 
+// Isolation levels
+const (
+	READ_UNCOMMITTED uint8 = iota
+	READ_COMMITTED
+	REPEATABLE_READ
+	SERIALIZABLE
+)
+
 type Transaction struct {
 	txnID          uint64
 	state          TxnState
 	sharedLocks    [][]byte
 	exclusiveLocks [][]byte
-	undoLog        *UndoLog
+	undoLog        *undo.UndoLog
 	isolationLevel uint8
 }
 
@@ -28,7 +37,7 @@ func NewTransaction(txnID uint64, isolationLevel uint8) *Transaction {
 		state:          ACTIVE,
 		sharedLocks:    make([][]byte, 0),
 		exclusiveLocks: make([][]byte, 0),
-		undoLog:        NewUndoLog(txnID),
+		undoLog:        undo.NewUndoLog(txnID),
 		isolationLevel: isolationLevel,
 	}
 }
@@ -38,23 +47,23 @@ func (t *Transaction) GetID() uint64 {
 }
 
 // RecordOperation adds a reversible operation to the undo log
-func (t *Transaction) RecordOperation(op Operation) error {
+func (t *Transaction) RecordOperation(op undo.Operation) error {
 	return t.undoLog.RecordOp(op)
 }
 
 // Deprecated: Use RecordOperation instead
 // Kept for backward compatibility during migration
-func (t *Transaction) AddUndo(op Operation) error {
+func (t *Transaction) AddUndo(op undo.Operation) error {
 	return t.undoLog.RecordOp(op)
 }
 
 // Rollback reverts all recorded operations in reverse order
-func (t *Transaction) Rollback(bufferMgr buffermanager.IBufferPoolManager) error {
+func (t *Transaction) Rollback(bufferMgr buffer.IBufferPoolManager) error {
 	return t.undoLog.Rollback(bufferMgr)
 }
 
 // RollbackToPoint reverts operations up to a savepoint
-func (t *Transaction) RollbackToPoint(point int, bufferMgr buffermanager.IBufferPoolManager) error {
+func (t *Transaction) RollbackToPoint(point int, bufferMgr buffer.IBufferPoolManager) error {
 	return t.undoLog.RollbackToPoint(point, bufferMgr)
 }
 
@@ -72,11 +81,16 @@ func (t *Transaction) GetState() TxnState {
 }
 
 // GetUndoLog returns the undo log for this transaction
-func (t *Transaction) GetUndoLog() *UndoLog {
+func (t *Transaction) GetUndoLog() *undo.UndoLog {
 	return t.undoLog
 }
 
 // GetIsolationLevel returns the isolation level for this transaction
 func (t *Transaction) GetIsolationLevel() uint8 {
 	return t.isolationLevel
+}
+
+// Commit marks this transaction as committed
+func (t *Transaction) Commit() {
+	t.state = COMMITTED
 }
