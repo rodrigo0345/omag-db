@@ -6,3 +6,4 @@ omag
 .backup/
 coverage.*
 go.{sum,work}
+cli

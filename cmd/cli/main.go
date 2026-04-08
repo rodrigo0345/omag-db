@@ -44,7 +44,7 @@ func NewDatabaseTUI() (*DatabaseTUI, error) {
 	}
 
 	// Storage Engine (pure - no transaction awareness)
-	storageEngine, err := btree.NewBPlusTreeBackendWithDisk(bufferPool, diskMgr)
+	storageEngine, err := btree.NewBPlusTreeBackend(bufferPool, diskMgr)
 	if err != nil {
 		return nil, fmt.Errorf("storage engine: %w", err)
 	}

@@ -16,8 +16,8 @@ type BPlusTreeBackend struct {
 	meta *MetaLogicPage
 }
 
-// NewBPlusTreeBackendWithDisk creates a new B+ tree storage engine with disk manager
-func NewBPlusTreeBackendWithDisk(
+// NewBPlusTreeBackend creates a new B+ tree storage engine with disk manager
+func NewBPlusTreeBackend(
 	bufferMgr buffer.IBufferPoolManager,
 	diskMgr interface {
 		WritePage(pageID page.ResourcePageID, pageData []byte) error
@@ -40,18 +40,6 @@ func NewBPlusTreeBackendWithDisk(
 	}
 
 	return backend, nil
-}
-
-// NewBPlusTreeBackend creates a new B+ tree storage engine (legacy - no persistence)
-func NewBPlusTreeBackend(bufferMgr buffer.IBufferPoolManager) (*BPlusTreeBackend, error) {
-	// Create in-memory meta page
-	meta := NewMetaPage()
-
-	return &BPlusTreeBackend{
-		bufferManager: bufferMgr,
-		diskManager:   nil,
-		meta:          meta,
-	}, nil
 }
 
 // LoadMetadataFromDisk loads the metadata from disk page 0 if it exists
