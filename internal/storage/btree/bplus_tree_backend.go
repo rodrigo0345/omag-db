@@ -38,7 +38,7 @@ func NewBPlusTreeBackend(
 		// If loading fails, that's OK - we'll use default metadata
 		// This happens on first run when page 0 doesn't exist yet
 	}
-
+	fmt.Printf("Loaded metadata: RootPage=%d\n", backend.meta.RootPage())
 	return backend, nil
 }
 
@@ -102,7 +102,8 @@ func (b *BPlusTreeBackend) initializeRoot() error {
 		return err
 	}
 
-	return nil
+	// Persist metadata to disk
+	return b.SaveMetadataToDisk()
 }
 
 // GetRootPageID returns the current root page ID for debugging purposes

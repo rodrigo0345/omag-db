@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/btree"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/txn"
@@ -20,7 +21,7 @@ const (
 
 // DatabaseTUI represents the database with 2PL isolation
 type DatabaseTUI struct {
-	storageEngine txn.StorageEngine     // BPlusTreeBackend
+	storageEngine storage.IStorageEngine // BPlusTreeBackend
 	isolationMgr  txn.IIsolationManager // 2PL isolation
 	bufferPool    *buffer.BufferPoolManager
 	diskMgr       *buffer.DiskManager
