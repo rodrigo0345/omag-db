@@ -29,7 +29,7 @@ type WALFlusher interface {
 
 type BufferPoolManager struct {
 	poolSize        int
-	frames          []page.IResourcePage                     // actual cache buffer with configurable replacement policy
+	frames          []page.IResourcePage                        // actual cache buffer with configurable replacement policy
 	pageTable       map[page.ResourcePageID]concurrency.FrameID // logical PageID to physical FrameID mapping
 	freeList        []concurrency.FrameID
 	diskManager     *DiskManager
@@ -38,7 +38,7 @@ type BufferPoolManager struct {
 	mu              sync.Mutex
 }
 
-func NewBufferPoolManager(poolSize int, diskManager *DiskManager) *BufferPoolManager {
+func NewBufferPoolManager(poolSize int, diskManager *DiskManager) IBufferPoolManager {
 	defaultReplacerPolicy := concurrency.NewClockReplacer(poolSize)
 	return NewBufferPoolManagerWithReplacer(poolSize, diskManager, defaultReplacerPolicy)
 }
@@ -47,7 +47,7 @@ func NewBufferPoolManager(poolSize int, diskManager *DiskManager) *BufferPoolMan
 func NewBufferPoolManagerWithReplacer(
 	poolSize int,
 	diskManager *DiskManager,
-	replacerManager concurrency.IReplacer) *BufferPoolManager {
+	replacerManager concurrency.IReplacer) IBufferPoolManager {
 	frames := make([]page.IResourcePage, poolSize)
 	freeList := make([]concurrency.FrameID, poolSize)
 
