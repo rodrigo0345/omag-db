@@ -1,7 +1,5 @@
 # InesDB - Indexed Node Engine Storage
 
-![InesDB Logo](logo.png)
-
 Welcome to the InesDB documentation. InesDB is a sophisticated on-disk database engine written in Go with focus on **row-major, interchangeable algorithms** for storage backends, efficient memory management, and robust transaction support.
 
 ## Quick Overview
