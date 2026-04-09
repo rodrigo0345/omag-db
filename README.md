@@ -1,33 +1,20 @@
-# omag-db
+# OMAG Database
 
-# Architectural objectives
+![OMAG Logo](docs/logo.png)
 
-- Row based structured
-- On-Disk database
-- With on-memory cache manager
+## Overview
 
-## Access Methods
+OMAG is a sophisticated on-disk database engine written in Go with a primary focus on **row-major, interchangeable algorithms** for storage backends. It provides multiple access methods (B+ Tree and LSM Tree) with efficient memory management, robust transaction support, and advanced concurrency control.
 
-### Page Layouts
+## Key Features
 
-- The size of the page depends on the system used 
-- Little Indian Byte Organization (LSB)
-- Slotted Pages to store variable size records
-- Logical sorting
-- Magic numbers are used in a meta table to find the version of the file format used
-- Checksum verification (to implement - add to page header)
-- Each record needs to introduce a column (omag_check) to make sure we can recover from checksum verification error
-- Right most neighbour is stored in the header
+- **Row-Based Storage**: Structured data with slotted pages
+- **Interchangeable Backends**: B+ Tree and LSM Tree access methods
+- **ACID Transactions**: Full transaction support with multiple isolation levels
+- **Advanced Concurrency**: MVCC, OCC, and Two-Phase Locking
+- **Smart Caching**: Multiple replacement policies with Write-Ahead Logging
 
-Header
+## Getting Started
 
-[Cell] -> (KeyVal, KeyLen)
-[Content] -> (Value)
-
-### B+Tree Design
-
-- Merge empty pages (internal | leaf)
-- Use Overflow pages
-- Use breadcums to keep track of the path done (bcstack)
-- Pluggable compression method (either row-wise or page-wise)
+For comprehensive documentation, architecture details, and API reference, visit the [documentation](docs/index.md).
 

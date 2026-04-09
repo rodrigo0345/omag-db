@@ -8,7 +8,7 @@ site_dir: 'site'
 
 theme:
   name: readthedocs
-  logo: images/logo.png
+  logo: logo.png
   favicon: images/favicon.png
 
 nav:

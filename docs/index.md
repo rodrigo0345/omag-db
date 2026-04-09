@@ -1,6 +1,8 @@
 # OMAG Storage Engine
 
-Welcome to the OMAG Storage Engine documentation. OMAG is a sophisticated on-disk database engine written in Go with focus on structured row-based storage, efficient memory management, and robust transaction support.
+![OMAG Logo](../docs/logo.png)
+
+Welcome to the OMAG Storage Engine documentation. OMAG is a sophisticated on-disk database engine written in Go with focus on **row-major, interchangeable algorithms** for storage backends, efficient memory management, and robust transaction support.
 
 ## Quick Overview
 
