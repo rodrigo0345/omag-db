@@ -20,8 +20,9 @@ type LeafLogicPage struct {
 }
 
 type Cell struct {
-	Key   []byte
-	Value []byte
+	Key        []byte
+	Value      []byte
+	OverflowID uint64 // ID of first overflow page (0 if no overflow)
 }
 
 // insert a key-value pair to the leaf page.
@@ -254,23 +255,31 @@ func (node *LeafLogicPage) GetCell(offset uint16) Cell {
 
 	keyLen := uint32(binary.LittleEndian.Uint16(node.data[offset32 : offset32+2])) // key length is 2 bytes
 	valLen := binary.LittleEndian.Uint32(node.data[offset32+2 : offset32+6])       // value length is 4 bytes to support larger values
+	overflowID := binary.LittleEndian.Uint64(node.data[offset32+6 : offset32+14])  // overflow page ID is 8 bytes
 
 	keyStart := offset32 + CellHeaderSize
 	valStart := keyStart + keyLen
 
 	return Cell{
-		Key:   node.data[keyStart : keyStart+keyLen],
-		Value: node.data[valStart : valStart+valLen],
+		Key:        node.data[keyStart : keyStart+keyLen],
+		Value:      node.data[valStart : valStart+valLen],
+		OverflowID: overflowID,
 	}
 }
 
 func (node *LeafLogicPage) WriteCell(offset uint16, key []byte, value []byte) uint16 {
+	return node.WriteCellWithOverflow(offset, key, value, 0)
+}
+
+// WriteCellWithOverflow writes a cell with an optional overflow page ID
+func (node *LeafLogicPage) WriteCellWithOverflow(offset uint16, key []byte, value []byte, overflowID uint64) uint16 {
 	offset32 := uint32(offset)
 	keyLen := uint32(len(key))
 	valLen := uint32(len(value))
 
 	binary.LittleEndian.PutUint16(node.data[offset32:offset32+2], uint16(keyLen))
 	binary.LittleEndian.PutUint32(node.data[offset32+2:offset32+6], valLen)
+	binary.LittleEndian.PutUint64(node.data[offset32+6:offset32+14], overflowID)
 
 	keyStart := offset32 + CellHeaderSize
 	copy(node.data[keyStart:], key)

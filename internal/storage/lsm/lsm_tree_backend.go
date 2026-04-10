@@ -8,7 +8,7 @@ import (
 	"github.com/rodrigo0345/omag/internal/txn/log"
 )
 
-const SSTableMaxSize = 100
+const SSTableMaxSize = 4096
 
 type LSMTreeBackend struct {
 	logManager    log.ILogManager

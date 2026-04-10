@@ -1,7 +1,10 @@
 package btree
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
+	"sort"
 
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/storage/page"
@@ -126,7 +129,39 @@ func (b *BPlusTreeBackend) Get(key []byte) ([]byte, error) {
 	defer leafResourcePage.RUnlock()
 
 	leafLogicalPage := &LeafLogicPage{data: leafResourcePage.GetData()}
-	return leafLogicalPage.Get(key)
+
+	// Get cell with overflow support
+	inlineValue, overflowID, err := b.getWithOverflow(leafLogicalPage, key)
+	if err != nil {
+		return nil, err
+	}
+
+	// If no overflow, return inline value
+	if overflowID == 0 {
+		return inlineValue, nil
+	}
+
+	// Reconstruct full value from inline + overflow pages
+	return b.readValueWithOverflow(inlineValue, overflowID)
+}
+
+// getWithOverflow retrieves a value and its overflow ID from a leaf page
+func (b *BPlusTreeBackend) getWithOverflow(leaf *LeafLogicPage, key []byte) ([]byte, uint64, error) {
+	cellCount := int(leaf.CellCount())
+
+	index := sort.Search(cellCount, func(i int) bool {
+		cell := leaf.GetCell(leaf.GetCellOffset(uint16(i)))
+		return bytes.Compare(cell.Key, key) >= 0
+	})
+
+	if index < cellCount {
+		cell := leaf.GetCell(leaf.GetCellOffset(uint16(index)))
+		if bytes.Equal(cell.Key, key) {
+			return cell.Value, cell.OverflowID, nil
+		}
+	}
+
+	return nil, 0, ErrKeyNotFound
 }
 
 func (b *BPlusTreeBackend) Put(key []byte, value []byte) error {
@@ -140,14 +175,32 @@ func (b *BPlusTreeBackend) Put(key []byte, value []byte) error {
 		rootID = b.meta.RootPage()
 	}
 
+	// Handle overflow for large values
+	inlineValue := value
+	var overflowID uint64
+	if len(value) > OverflowThreshold {
+		inlineLen, overflowPageID, err := b.writeValueWithOverflow(value)
+		if err != nil {
+			return fmt.Errorf("failed to write overflow pages: %w", err)
+		}
+		overflowID = overflowPageID
+		inlineValue = value[:inlineLen] // Truncate to inline threshold
+	}
+
 	path, err := b.findLeafPage(rootID, key)
 	if err != nil {
+		if overflowID != 0 {
+			b.deleteValueWithOverflow(overflowID)
+		}
 		return fmt.Errorf("findLeafPage: %w", err)
 	}
 
 	leafID := path[len(path)-1]
 	leafPage, err := b.bufferManager.PinPage(page.ResourcePageID(leafID))
 	if err != nil {
+		if overflowID != 0 {
+			b.deleteValueWithOverflow(overflowID)
+		}
 		return err
 	}
 
@@ -155,14 +208,18 @@ func (b *BPlusTreeBackend) Put(key []byte, value []byte) error {
 
 	leaf := &LeafLogicPage{data: leafPage.GetData()}
 
-	err = leaf.Insert(key, value)
+	// Try to insert with overflow support
+	err = b.insertWithOverflow(leaf, key, inlineValue, overflowID)
 	if err == ErrPageFull {
 		// splitLeaf takes ownership of the lock and the pin
-		return b.splitLeaf(path, leafPage, leafID, key, value)
+		return b.splitLeafWithOverflow(path, leafPage, leafID, key, inlineValue, overflowID)
 	}
 	if err != nil {
 		leafPage.WUnlock()
 		b.bufferManager.UnpinPage(page.ResourcePageID(leafID), false)
+		if overflowID != 0 {
+			b.deleteValueWithOverflow(overflowID)
+		}
 		return err
 	}
 
@@ -174,6 +231,121 @@ func (b *BPlusTreeBackend) Put(key []byte, value []byte) error {
 	}
 
 	return nil
+}
+
+// insertWithOverflow inserts a key-value pair, storing the overflow ID in the cell
+func (b *BPlusTreeBackend) insertWithOverflow(leaf *LeafLogicPage, key []byte, inlineValue []byte, overflowID uint64) error {
+	cellSize := uint16(CellHeaderSize + len(key) + len(inlineValue))
+	spaceNeeded := cellSize + SlotSize
+
+	slotArrayEnd := LeafHeaderSize + (leaf.CellCount() * SlotSize)
+	availableSpace := leaf.FreeSpacePointer() - slotArrayEnd
+
+	if availableSpace < spaceNeeded {
+		absoluteUsedSpace := slotArrayEnd
+		for i := uint16(0); i < leaf.CellCount(); i++ {
+			c := leaf.GetCell(leaf.GetCellOffset(i))
+			absoluteUsedSpace += uint16(CellHeaderSize + len(c.Key) + len(c.Value))
+		}
+		actualFreeSpace := uint16(len(leaf.data)) - absoluteUsedSpace
+		if actualFreeSpace >= spaceNeeded {
+			leaf.Vacuum()
+		} else {
+			return ErrPageFull
+		}
+	}
+
+	insertIndex := uint16(sort.Search(int(leaf.CellCount()), func(i int) bool {
+		cell := leaf.GetCell(leaf.GetCellOffset(uint16(i)))
+		return bytes.Compare(cell.Key, key) >= 0
+	}))
+
+	newFreeSpace := leaf.FreeSpacePointer() - cellSize
+	leaf.SetFreeSpacePointer(newFreeSpace)
+	leaf.WriteCellWithOverflow(newFreeSpace, key, inlineValue, overflowID)
+
+	if insertIndex < leaf.CellCount() {
+		insertPos := LeafHeaderSize + (insertIndex * SlotSize)
+		endPos := LeafHeaderSize + (leaf.CellCount() * SlotSize)
+		copy(leaf.data[insertPos+SlotSize:endPos+SlotSize], leaf.data[insertPos:endPos])
+	}
+
+	newSlotPos := LeafHeaderSize + (insertIndex * SlotSize)
+	binary.LittleEndian.PutUint16(leaf.data[newSlotPos:], newFreeSpace)
+	leaf.SetCellCount(leaf.CellCount() + 1)
+
+	return nil
+}
+
+// splitLeafWithOverflow splits a full leaf page with overflow support
+func (b *BPlusTreeBackend) splitLeafWithOverflow(
+	breadcrumbs []uint64,
+	leafPage page.IResourcePage,
+	leafID uint64,
+	key []byte,
+	inlineValue []byte,
+	overflowID uint64,
+) error {
+	if len(breadcrumbs) == 0 {
+		leafPage.WUnlock()
+		b.bufferManager.UnpinPage(page.ResourcePageID(leafID), false)
+		if overflowID != 0 {
+			b.deleteValueWithOverflow(overflowID)
+		}
+		return fmt.Errorf("breadcrumbs is empty, cannot promote key")
+	}
+
+	// Allocate new sibling page
+	newPageRef, err := b.bufferManager.NewPage()
+	if err != nil {
+		leafPage.WUnlock()
+		b.bufferManager.UnpinPage(page.ResourcePageID(leafID), false)
+		if overflowID != 0 {
+			b.deleteValueWithOverflow(overflowID)
+		}
+		return fmt.Errorf("NewPage: %w", err)
+	}
+	newPage := *newPageRef
+	newPageID := newPage.GetID()
+
+	leaf := &LeafLogicPage{data: leafPage.GetData()}
+	newPageData := NewLeafPage(uint32(len(newPage.GetData())))
+
+	promotedKey := leaf.Split(newPageData, uint64(newPageID))
+
+	// Insert the new key into whichever half it belongs to
+	if bytes.Compare(key, promotedKey) < 0 {
+		if err := b.insertWithOverflow(leaf, key, inlineValue, overflowID); err != nil {
+			leafPage.WUnlock()
+			b.bufferManager.UnpinPage(page.ResourcePageID(leafID), false)
+			b.bufferManager.UnpinPage(page.ResourcePageID(newPageID), false)
+			if overflowID != 0 {
+				b.deleteValueWithOverflow(overflowID)
+			}
+			return fmt.Errorf("insert into old leaf: %w", err)
+		}
+	} else {
+		if err := b.insertWithOverflow(newPageData, key, inlineValue, overflowID); err != nil {
+			leafPage.WUnlock()
+			b.bufferManager.UnpinPage(page.ResourcePageID(leafID), false)
+			b.bufferManager.UnpinPage(page.ResourcePageID(newPageID), false)
+			if overflowID != 0 {
+				b.deleteValueWithOverflow(overflowID)
+			}
+			return fmt.Errorf("insert into new leaf: %w", err)
+		}
+	}
+
+	copy(leafPage.GetData(), leaf.data)
+	leafPage.SetDirty(true)
+	leafPage.WUnlock()
+	b.bufferManager.UnpinPage(page.ResourcePageID(leafID), true)
+
+	copy(newPage.GetData(), newPageData.data)
+	newPage.SetDirty(true)
+	b.bufferManager.UnpinPage(page.ResourcePageID(newPageID), true)
+
+	return b.promoteKey(breadcrumbs[:len(breadcrumbs)-1], promotedKey, uint64(newPageID))
 }
 
 func (b *BPlusTreeBackend) Delete(key []byte) error {
