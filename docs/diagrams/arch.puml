@@ -63,12 +63,11 @@ package "Write-Ahead Coordination" as WriteAheadLayer #FFE4CD {
 
     class "DefaultWriteHandler" as DefaultWrite #FFE4CD {
         - rollbackMgr: RollbackManager
-        - logManager: ILogManager (optional)
-        + HandleWrite(txn, op: WriteOp)
-        '  1. Capture before-image
-        '  2. Optionally log to WAL
-        '  3. Execute storage operation
-        '  4. Record to UndoLog
+        - logManager: ILogManager
+        - tableSchema: TableSchema
+        - indexMgr: IndexManager
+        + HandleWrite(txn, op: WriteOp) : error
+        + SetIndexContext(schema, indexMgr) : error
     }
 
     class "WriteOp" as WriteOpData #FFE4CD {
@@ -77,11 +76,6 @@ package "Write-Ahead Coordination" as WriteAheadLayer #FFE4CD {
         - pageID: ResourcePageID
         - offset: uint16
     }
-    
-    note on link from DefaultWrite to RollbackMgr
-        Records operations to UndoLog
-        No direct WAL dependency
-    end note
 }
 
 ' ========================================================
@@ -101,7 +95,14 @@ package "Transaction Management" as LogicalLayer #E0FFFF {
         - state: TxnState
         - undoLog: *UndoLog
         - locks: [][]byte
+        - tableName: string
+        - tableSchema: *TableSchema
+        - cleanupCallbacks: []func()
+        + SetTableContext(name, schema)
+        + GetTableContext() : (name, schema)
         + RecordOperation(op: Operation) : error
+        + RegisterCleanupCallback(func)
+        + ExecuteCleanupCallbacks() : error
         + Rollback(bufferMgr) : error
         + SavePoint() : int
     }
@@ -111,18 +112,26 @@ package "Transaction Management" as LogicalLayer #E0FFFF {
         - writeHandler: WriteHandler
         - bufferPool: IBufferManager
         - indexMgr: IndexManager
+        - schemaManager: SchemaManager
+        + BeginTransaction(isolationLevel, tableName)
+        + Commit(txnID)
+        + Abort(txnID)
     }
 
     class "TwoPhaseLockManager (2PL)" as 2PL #FFE4E1 {
         - LockTable
         - DeadlockDetector: Wait-For-Graph
         - writeHandler: WriteHandler
+        + AcquireIndexLocks(txn, indexName, value)
+        + ReleaseIndexLocks(txn)
     }
 
     class "MVCCManager" as MVCC #FFE4E1 {
         - VersionStore
         - TimestampOracle
         - writeHandler: WriteHandler
+        + CaptureIndexSnapshot(tableSchema) : Snapshot
+        + ValidateIndexSnapshot(snapshot) : error
         + ProvideSnapshot()
     }
 
@@ -130,6 +139,8 @@ package "Transaction Management" as LogicalLayer #E0FFFF {
         - ReadSet
         - WriteSet
         - writeHandler: WriteHandler
+        + CaptureIndexSnapshot(tableSchema) : Snapshot
+        + DetectIndexConflicts(newSnapshot) : error
         + Validate()
     }
     
@@ -137,26 +148,106 @@ package "Transaction Management" as LogicalLayer #E0FFFF {
 }
 
 ' ========================================================
-' 2. LOGICAL INDEXING LAYER
+' 2a. SCHEMA MANAGEMENT LAYER (NEW - schema definitions)
+' ========================================================
+package "Schema Management" as SchemaLayer #E0E0E0 {
+    note top
+        Defines table structure independent of data
+        No transaction awareness, no locking
+    end note
+
+    class DataType <<enumeration>> #F0F0F0 {
+        Int64, String, Bytes
+        Float64, Bool, Nullable
+    }
+
+    class Column #E0E0E0 {
+        - name: string
+        - dataType: DataType
+        - nullable: bool
+    }
+
+    class IndexType <<enumeration>> #F0F0F0 {
+        Primary, Secondary, Unique
+    }
+
+    class Index #E0E0E0 {
+        - name: string
+        - type: IndexType
+        - columns: []string
+        - isUnique: bool
+        - isSparse: bool
+    }
+
+    class TableSchema #E0E0E0 {
+        - name: string
+        - primaryKey: string
+        - columns: Map<name, Column>
+        - indexes: Map<name, Index>
+        - createdAt: int64
+        - modifiedAt: int64
+        + AddColumn(name, type, nullable)
+        + AddIndex(name, type, columns, isUnique)
+        + GetColumn(name) : Column
+        + GetIndex(name) : Index
+        + Validate() : error
+    }
+
+    class SchemaManager #E0E0E0 {
+        - tables: Map<tableName, TableSchema>
+        + CreateTable(schema) : error
+        + DropTable(name) : error
+        + GetTableSchema(name) : TableSchema
+        + ListTables() : []string
+    }
+
+    TableSchema *-- Column
+    TableSchema *-- Index
+    SchemaManager *-- TableSchema
+    Column *-- DataType
+    Index *-- IndexType
+}
+
+' ========================================================
+' 2b. LOGICAL INDEXING LAYER (with schema integration)
 ' ========================================================
 package "Logical Index Management" as IndexLayer #E0FFFF {
     interface "Index" as IIndex <<interface>> #ADD8E6 {
         + Insert(Key, Value)
         + Get(Key) : Value
         + Scan(Lower, Upper) : Iterator
+        + Delete(Key) : error
     }
 
-    class IndexManager {
-        - indexes: Map<IndexID, Index>
+    class IndexManager #FFE4E1 {
+        - tableSchema: TableSchema
+        - indexes: Map<IndexName, StorageEngine>
+        - writeHandler: WriteHandler
+        + AddToIndex(indexName, value, primaryKey)
+        + RemoveFromIndex(indexName, value, primaryKey)
+        + GetPrimaryKeysForValue(indexName, value)
+        + RangeQueryIndex(indexName, start, end)
+        + GetIndexStats(indexName) : IndexStats
+        ___
+        Automatic maintenance on:
+        INSERT (add entries), DELETE (remove entries)
+        UPDATE (remove old + add new entries)
     }
 
     class "PrimaryIndex (Clustered)" as Primary #FFE4E1 {
         - backend: StorageEngine
+        - schema: TableSchema
     }
 
     class "SecondaryIndex (Unclustered)" as Secondary #FFE4E1 {
         - backend: StorageEngine
+        - indexDef: Index
+        + MaintainOnWrite(txn, oldRow, newRow)
     }
+
+    IndexManager o-- SchemaManager : references
+    IIndex <|-- PrimaryIndex
+    IIndex <|-- SecondaryIndex
 }
 
 ' ========================================================
@@ -234,8 +325,8 @@ IIsolation ..> IWriteHandler : uses for Write ops
 MVCC ..> IWriteHandler : delegates Write
 OCC ..> IWriteHandler : delegates Write (validation phase)
 
-DefaultWrite *-- RollbackMgr : records ops
-DefaultWrite o-- IWAL : "optional:\nWAL logging"
+DefaultWrite *-- RollbackMgr : records ops to UndoLog
+DefaultWrite o-- IWAL : optional WAL logging
 DefaultWrite o-- IStorage : calls storage ops
 
 ' --- UNDO/ROLLBACK LAYER INTEGRATION ---
@@ -247,7 +338,10 @@ IIsolation ..> RollbackMgr : uses for rollback on Abort
 TransactionManager *-- IIsolation
 TransactionManager *-- IndexManager
 TransactionManager *-- Transaction
+TransactionManager *-- SchemaManager
+Transaction o-- TableSchema : references schema
 IndexManager *-- IIndex
+IndexManager *-- TableSchema : uses for index definitions
 
 ' --- STORAGE ENGINE ISOLATION ---
 IStorage ..> IBuffer : accesses pages ONLY
@@ -255,13 +349,6 @@ BTree --|> IStorage
 LSM --|> IStorage
 BTree *-- IBuffer
 BTree *-- ILatch
-
-' --- OPTIONAL WAL (decoupled from storage) ---
-note on link from DefaultWrite to IWAL
-    Optional: only if durability is needed
-    Alternative: MVCC, pure undo log, etc.
-    Storage engine doesn't know about it
-end note
 
 ' --- INHERITANCE HIERARCHIES ---
 IIsolation <|-- 2PL
@@ -287,7 +374,8 @@ IWAL <|-- WALImplementation
 ' --- LAYOUT & LAYERING ---
 UndoLayer -[hidden]down- WriteAheadLayer
 WriteAheadLayer -[hidden]down- LogicalLayer
-LogicalLayer -[hidden]down- IndexLayer
+LogicalLayer -[hidden]down- SchemaLayer
+SchemaLayer -[hidden]down- IndexLayer
 IndexLayer -[hidden]down- StorageLayer
 StorageLayer -[hidden]down- LatchLayer
 LatchLayer -[hidden]down- ResourceLayer
@@ -297,6 +385,31 @@ note top of UndoLayer
     ✓ Independent: Zero coupling to WAL
     ✓ In-memory rollback without parsing
     ✓ Works with any isolation or logging strategy
+end note
+
+note right of SchemaLayer
+    ✓ Defines table structure once at table creation
+    ✓ Used by all layers: transactions, indexes, storage
+    ✓ No transaction locks on schema (stable)
+    ✓ Supports compound indexes and data types
+end note
+
+note right of 2PL
+    ✓ Index-aware locking with format: __index:table:index:value
+    ✓ Prevents dirty reads on secondary indexes
+    ✓ Automatic cleanup on rollback
+end note
+
+note right of MVCC
+    ✓ Index snapshot consistency via fingerprints
+    ✓ Detects dropped/modified indexes pre-commit
+    ✓ Prevents phantom reads on indexes
+end note
+
+note right of OCC
+    ✓ Tracks index state changes per transaction
+    ✓ Detects write-write index conflicts
+    ✓ Conservative: any change causes abort
 end note
 
 note top of WriteAheadLayer
