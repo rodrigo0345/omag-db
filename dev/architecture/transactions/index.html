@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Transactions - InesDB - Indexed Node Engine Storage</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../../css/version-select.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Transactions";
+        var mkdocs_page_input_path = "architecture/transactions.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../..">
+          <img src="../../logo.png" class="logo" alt="Logo"/>
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../bplus-tree/">B+ Tree</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../lsm-tree/">LSM Tree</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../buffer-pool/">Buffer Pool</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">Transactions</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#acid-guarantees">ACID Guarantees</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#atomicity">Atomicity</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#consistency">Consistency</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#isolation">Isolation</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#durability">Durability</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#transaction-lifecycle">Transaction Lifecycle</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#isolation-levels">Isolation Levels</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#read-uncommitted">READ UNCOMMITTED</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#read-committed">READ COMMITTED</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#repeatable-read">REPEATABLE READ</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#serializable">SERIALIZABLE</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#isolation-strategies">Isolation Strategies</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#mvcc-multi-version-concurrency-control">MVCC (Multi-Version Concurrency Control)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#occ-optimistic-concurrency-control">OCC (Optimistic Concurrency Control)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#2pl-two-phase-locking">2PL (Two-Phase Locking)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#lock-manager">Lock Manager</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#lock-types">Lock Types</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#lock-compatibility-matrix">Lock Compatibility Matrix</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#deadlock-detection">Deadlock Detection</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#write-ahead-logging-wal">Write-Ahead Logging (WAL)</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#undo-logging">Undo Logging</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuration-parameters">Configuration Parameters</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../concurrency/">Concurrency</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Features</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../features/">Index</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">API Reference</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api-reference/">Index</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/btree/">B+ Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/buffer-pool/">Buffer Pool API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/lsm-tree/">LSM Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/transactions/">Transactions API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/concurrency/">Concurrency API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Packages</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../packages/overview/">Overview</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Documentation</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../versioning/">Versioning</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Contributing</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../contributing/">Contributing</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">InesDB - Indexed Node Engine Storage</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Architecture</li>
+      <li class="breadcrumb-item active">Transactions</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/rodrigo0345/omag-db/edit/main/docs/architecture/transactions.md">Edit on inesdb</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="transactions">Transactions<a class="headerlink" href="#transactions" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>InesDB provides comprehensive ACID transaction support with multiple isolation levels and concurrency control strategies. Transactions ensure data consistency and enable safe concurrent execution of queries.</p>
+<h2 id="acid-guarantees">ACID Guarantees<a class="headerlink" href="#acid-guarantees" title="Permanent link">&para;</a></h2>
+<h3 id="atomicity">Atomicity<a class="headerlink" href="#atomicity" title="Permanent link">&para;</a></h3>
+<p>All-or-nothing semantics using Write-Ahead Logging (WAL):</p>
+<ul>
+<li>All transaction changes are logged before being applied</li>
+<li>On failure, transactions can be rolled back completely via undo logs</li>
+<li>Partial transactions never visible to other transactions</li>
+<li>Crash recovery replays WAL to restore consistent state</li>
+</ul>
+<h3 id="consistency">Consistency<a class="headerlink" href="#consistency" title="Permanent link">&para;</a></h3>
+<p>Transactions maintain database invariants:</p>
+<ul>
+<li>Transaction isolation prevents dirty reads</li>
+<li>Locks ensure data locked before modification</li>
+<li>Undo logs support automatic rollback</li>
+<li>Constraints enforced at transaction boundaries</li>
+</ul>
+<h3 id="isolation">Isolation<a class="headerlink" href="#isolation" title="Permanent link">&para;</a></h3>
+<p>Multiple concurrent transactions don't interfere:</p>
+<ul>
+<li>Isolation levels: READ UNCOMMITTED, READ COMMITTED, REPEATABLE READ, SERIALIZABLE</li>
+<li>Isolation managers implement different strategies</li>
+<li>Lock managers prevent conflicts</li>
+<li>Version managers support multi-version schemes</li>
+</ul>
+<h3 id="durability">Durability<a class="headerlink" href="#durability" title="Permanent link">&para;</a></h3>
+<p>Committed changes survive system failures:</p>
+<ul>
+<li>Write-Ahead Log (WAL) written to persistent storage</li>
+<li>Batched writes reduce I/O overhead</li>
+<li>Checkpointing speeds recovery</li>
+<li>Page versions tracked on disk</li>
+</ul>
+<h2 id="transaction-lifecycle">Transaction Lifecycle<a class="headerlink" href="#transaction-lifecycle" title="Permanent link">&para;</a></h2>
+<p>```
+1. BEGIN TRANSACTION
+   ├─ Allocate Transaction ID (XID)
+   ├─ Determine Isolation Level
+   ├─ Initialize Read Set (empty)
+   ├─ Initialize Write Set (empty)
+   ├─ Record Start Time
+   └─ Thread-local Context Created</p>
+<ol>
+<li>
+<p>EXECUTE STATEMENTS
+   ├─ READ: Check version visibility
+   │   ├─ Check own writes first
+   │   ├─ Check committed versions
+   │   ├─ Check isolation level
+   │   └─ Return appropriate version
+   │
+   └─ WRITE: Log and modify
+       ├─ Acquire locks (if 2PL)
+       ├─ Log to WAL
+       ├─ Create new version or modify
+       ├─ Add to write set
+       └─ Update in-memory state</p>
+</li>
+<li>
+<p>COMMIT
+   ├─ Validate (if OCC)
+   │   ├─ Check for conflicts
+   │   ├─ Abort if conflict detected
+   │   └─ Proceed if valid
+   │
+   ├─ Flush WAL to disk
+   ├─ Mark transaction committed in log
+   ├─ Release all locks
+   ├─ Publish modified versions
+   ├─ Update visibility information
+   └─ Transaction Context Destroyed</p>
+</li>
+<li>
+<p>ABORT/ROLLBACK
+   ├─ Execute undo operations
+   │   ├─ Reverse writes in reverse order
+   │   ├─ Delete new versions
+   │   └─ Restore old values
+   │
+   ├─ Release all locks
+   ├─ Log rollback in WAL
+   ├─ Mark aborted in log
+   └─ Transaction Context Destroyed
+```</p>
+</li>
+</ol>
+<h2 id="isolation-levels">Isolation Levels<a class="headerlink" href="#isolation-levels" title="Permanent link">&para;</a></h2>
+<h3 id="read-uncommitted">READ UNCOMMITTED<a class="headerlink" href="#read-uncommitted" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Most permissive</li>
+<li>Transactions see uncommitted changes (dirty reads possible)</li>
+<li>Minimal locking overhead</li>
+<li>Use when: Approximate results acceptable</li>
+</ul>
+<h3 id="read-committed">READ COMMITTED<a class="headerlink" href="#read-committed" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Default for most databases</li>
+<li>Transaction sees queries as of start of each statement (not transaction)</li>
+<li>Committed changes visible during transaction</li>
+<li>Non-repeatable reads possible</li>
+<li>Use when: Standard correctness with good performance</li>
+</ul>
+<h3 id="repeatable-read">REPEATABLE READ<a class="headerlink" href="#repeatable-read" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Snapshot isolation</li>
+<li>Transaction sees consistent snapshot from its start</li>
+<li>Prevents dirty reads and non-repeatable reads</li>
+<li>Phantom reads possible</li>
+<li>Use when: Consistency within transaction important</li>
+</ul>
+<h3 id="serializable">SERIALIZABLE<a class="headerlink" href="#serializable" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Strictest isolation</li>
+<li>Equivalent to serial execution of transactions</li>
+<li>All anomalies prevented (dirty reads, non-repeatable reads, phantoms)</li>
+<li>Lowest concurrency</li>
+</ul>
+<h2 id="isolation-strategies">Isolation Strategies<a class="headerlink" href="#isolation-strategies" title="Permanent link">&para;</a></h2>
+<h3 id="mvcc-multi-version-concurrency-control">MVCC (Multi-Version Concurrency Control)<a class="headerlink" href="#mvcc-multi-version-concurrency-control" title="Permanent link">&para;</a></h3>
+<p>Each transaction sees a consistent snapshot of data:</p>
+<p>```
+Version History of Key K:
+Value₁──► Value₂──► Value₃──► Current
+ │        │        │
+ Txn1     Txn2     Txn3,Txn4
+ [1-3]    [4-8]    [9-∞]</p>
+<p>Transaction Visibility:
+- Txn10 (started after Txn3): Sees Value₃
+- Txn7: Sees Value₂ (REPEATABLE READ)
+- Txn2: Sees Value₁ (as of Txn2 start)
+```</p>
+<p>Benefits:
+- Readers don't block writers
+- Writers don't block readers
+- Long transactions don't hold locks</p>
+<h3 id="occ-optimistic-concurrency-control">OCC (Optimistic Concurrency Control)<a class="headerlink" href="#occ-optimistic-concurrency-control" title="Permanent link">&para;</a></h3>
+<p>Transactions proceed without locks, validating at commit:</p>
+<p>```
+Phase 1: EXECUTION
+├─ Read from consistent snapshot
+├─ Perform computations
+└─ Buffer writes</p>
+<p>Phase 2: VALIDATION
+├─ Check read set not modified by committed txns
+├─ Check write set has no conflicts
+└─ Abort if conflicts detected</p>
+<p>Phase 3: WRITE
+├─ Install all writes
+└─ Release resources
+```</p>
+<p>Best for: Low-conflict workloads</p>
+<h3 id="2pl-two-phase-locking">2PL (Two-Phase Locking)<a class="headerlink" href="#2pl-two-phase-locking" title="Permanent link">&para;</a></h3>
+<p>Explicit locking before access:</p>
+<p>```
+Phase 1: GROWING PHASE
+├─ Acquire all locks needed
+├─ No locks released yet
+└─ Conflict detection: Wait or Deadlock</p>
+<p>Phase 2: SHRINKING PHASE
+├─ After last lock acquired
+├─ Begin releasing locks
+└─ No new locks acquired</p>
+<p>Timeline:
+Txn1: S-Lock K1 ──► S-Lock K2 ──► Release K1 ──► Release K2
+Txn2:                        X-Lock K2 (wait)        (proceeds)
+```</p>
+<p>Best for: High-conflict workloads</p>
+<h2 id="lock-manager">Lock Manager<a class="headerlink" href="#lock-manager" title="Permanent link">&para;</a></h2>
+<p>Handles distributed deadlock detection:</p>
+<h3 id="lock-types">Lock Types<a class="headerlink" href="#lock-types" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Shared (S)</strong>: Multiple readers, no writers</li>
+<li><strong>Exclusive (X)</strong>: Single writer, no readers</li>
+<li><strong>Intent Shared (IS)</strong>: Intent to acquire shared locks on children</li>
+<li><strong>Intent Exclusive (IX)</strong>: Intent to acquire exclusive locks on children</li>
+</ul>
+<h3 id="lock-compatibility-matrix">Lock Compatibility Matrix<a class="headerlink" href="#lock-compatibility-matrix" title="Permanent link">&para;</a></h3>
+<p><code>│  S  │  X  │ IS  │ IX  │
+────────┼─────┼─────┼─────┼─────┤
+  S     │  Y  │  N  │  Y  │  N  │
+  X     │  N  │  N  │  N  │  N  │
+  IS    │  Y  │  N  │  Y  │  Y  │
+  IX    │  N  │  N  │  Y  │  Y  │</code></p>
+<h3 id="deadlock-detection">Deadlock Detection<a class="headerlink" href="#deadlock-detection" title="Permanent link">&para;</a></h3>
+<p>Wait-for graphs track lock dependencies:</p>
+<p>```
+Txn1 holds lock on R1, waits for R2
+Txn2 holds lock on R2, waits for R1</p>
+<p>Wait-for Graph:
+Txn1 ──► Txn2
+ ▲────────┘</p>
+<p>Cycle detected → Deadlock!
+Solution: Abort one transaction
+```</p>
+<h2 id="write-ahead-logging-wal">Write-Ahead Logging (WAL)<a class="headerlink" href="#write-ahead-logging-wal" title="Permanent link">&para;</a></h2>
+<p>All modifications logged before being applied:</p>
+<p>```
+Application Request
+        │
+        ▼
+Write to WAL ◄─── Flushed to disk
+        │
+        ▼
+Modify In-Memory State
+        │
+        ▼
+Return Success</p>
+<p>On Crash:
+├─ Replay all logged operations
+├─ Ignore uncommitted transactions
+└─ Restore database to consistent state
+```</p>
+<h2 id="undo-logging">Undo Logging<a class="headerlink" href="#undo-logging" title="Permanent link">&para;</a></h2>
+<p>Supports transaction rollback:</p>
+<p>```
+Operation: UPDATE K FROM V1 TO V2</p>
+<p>Log Entry:
+├─ Undo Log: (K, V1)  [store old value]
+├─ Redo Log: (K, V2)  [store new value]
+└─ Txn ID and LSN</p>
+<p>On ROLLBACK:
+├─ For each log entry (in reverse)
+├─ Restore value from undo log
+└─ Delete redo log entry
+```</p>
+<h2 id="configuration-parameters">Configuration Parameters<a class="headerlink" href="#configuration-parameters" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Isolation Level</strong>: Transaction default</li>
+<li><strong>Lock Wait Timeout</strong>: How long to wait for deadlock resolution</li>
+<li><strong>Max Transaction Log Size</strong>: Memory limit for txn state</li>
+<li><strong>WAL Buffer Size</strong>: Batch size before flushing</li>
+<li><strong>Checkpoint Interval</strong>: How often to create recovery points</li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../buffer-pool/" class="btn btn-neutral float-left" title="Buffer Pool"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../concurrency/" class="btn btn-neutral float-right" title="Concurrency">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../buffer-pool/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../concurrency/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+      <script src="../../js/version-select.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

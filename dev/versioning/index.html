@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Versioning - InesDB - Indexed Node Engine Storage</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../css/version-select.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Versioning";
+        var mkdocs_page_input_path = "versioning.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="..">
+          <img src="../logo.png" class="logo" alt="Logo"/>
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture/bplus-tree/">B+ Tree</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture/lsm-tree/">LSM Tree</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture/buffer-pool/">Buffer Pool</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture/transactions/">Transactions</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture/concurrency/">Concurrency</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Features</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../features/">Index</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">API Reference</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../api-reference/">Index</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../api/btree/">B+ Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../api/buffer-pool/">Buffer Pool API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../api/lsm-tree/">LSM Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../api/transactions/">Transactions API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../api/concurrency/">Concurrency API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Packages</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../packages/overview/">Overview</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Documentation</span></p>
+              <ul class="current">
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">Versioning</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#accessing-different-versions">Accessing Different Versions</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#version-selector">Version Selector</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#direct-version-urls">Direct Version URLs</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#release-documentation">Release Documentation</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#what-changes-between-versions">What Changes Between Versions</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#version-management">Version Management</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#how-versions-are-created">How Versions Are Created</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#setting-a-version-as-default">Setting a Version as Default</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#migration-between-versions">Migration Between Versions</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#finding-migration-guides">Finding Migration Guides</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#development-vs-stable">Development vs. Stable</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#latest-development">Latest (Development)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#stable-releases">Stable Releases</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#using-versioned-apis">Using Versioned APIs</a>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Contributing</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../contributing/">Contributing</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">InesDB - Indexed Node Engine Storage</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Documentation</li>
+      <li class="breadcrumb-item active">Versioning</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/rodrigo0345/omag-db/edit/main/docs/versioning.md">Edit on inesdb</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="documentation-versioning">Documentation Versioning<a class="headerlink" href="#documentation-versioning" title="Permanent link">&para;</a></h1>
+<p>InesDB documentation supports multiple versions, allowing you to view documentation for different releases of the storage engine.</p>
+<h2 id="accessing-different-versions">Accessing Different Versions<a class="headerlink" href="#accessing-different-versions" title="Permanent link">&para;</a></h2>
+<h3 id="version-selector">Version Selector<a class="headerlink" href="#version-selector" title="Permanent link">&para;</a></h3>
+<p>When browsing the documentation site, you'll see a version selector in the top navigation bar. Click it to view:</p>
+<ul>
+<li><strong>Latest</strong>: Current development version on <code>main</code> branch</li>
+<li><strong>Stable Releases</strong>: Official tagged releases (v0.1.0, v0.2.0, etc.)</li>
+</ul>
+<p>The version selector appears in the header alongside the search functionality.</p>
+<h3 id="direct-version-urls">Direct Version URLs<a class="headerlink" href="#direct-version-urls" title="Permanent link">&para;</a></h3>
+<p>You can also access specific versions directly:</p>
+<p><code>https://rodrigo0345.github.io/inesdb/                    # Latest (main branch)
+https://rodrigo0345.github.io/inesdb/0.1.0/              # Version 0.1.0
+https://rodrigo0345.github.io/inesdb/0.2.0/              # Version 0.2.0</code></p>
+<h2 id="release-documentation">Release Documentation<a class="headerlink" href="#release-documentation" title="Permanent link">&para;</a></h2>
+<p>Each release has its own complete documentation including:</p>
+<ul>
+<li>Architecture documentation for that version</li>
+<li>API reference matching that release</li>
+<li>Feature documentation for available features</li>
+<li>Configuration options for that version</li>
+</ul>
+<h3 id="what-changes-between-versions">What Changes Between Versions<a class="headerlink" href="#what-changes-between-versions" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>New Features</strong>: Documented in latest version</li>
+<li><strong>Deprecated APIs</strong>: Marked in newer versions</li>
+<li><strong>Bug Fixes</strong>: Noted in release section</li>
+<li><strong>Breaking Changes</strong>: Highlighted in migration guides</li>
+</ul>
+<h2 id="version-management">Version Management<a class="headerlink" href="#version-management" title="Permanent link">&para;</a></h2>
+<h3 id="how-versions-are-created">How Versions Are Created<a class="headerlink" href="#how-versions-are-created" title="Permanent link">&para;</a></h3>
+<p>When you push a git tag to main:</p>
+<p><code>bash
+git tag -a v0.1.0 -m "Release version 0.1.0"
+git push origin v0.1.0</code></p>
+<p>The CI/CD pipeline automatically:</p>
+<ol>
+<li>Builds documentation for that version</li>
+<li>Publishes it under <code>/inesdb/0.1.0/</code> path</li>
+<li>Updates the version selector</li>
+<li>Keeps older versions accessible</li>
+</ol>
+<h3 id="setting-a-version-as-default">Setting a Version as Default<a class="headerlink" href="#setting-a-version-as-default" title="Permanent link">&para;</a></h3>
+<p>The latest version on <code>main</code> is always set as the default landing page. When you release a new stable version, it becomes the default documentation visitors see.</p>
+<h2 id="migration-between-versions">Migration Between Versions<a class="headerlink" href="#migration-between-versions" title="Permanent link">&para;</a></h2>
+<p>Each version includes information about:</p>
+<ul>
+<li><strong>Upgrading</strong>: How to upgrade from previous versions</li>
+<li><strong>Compatibility</strong>: Breaking changes and migrations needed</li>
+<li><strong>Deprecations</strong>: APIs/features being removed in future versions</li>
+</ul>
+<h3 id="finding-migration-guides">Finding Migration Guides<a class="headerlink" href="#finding-migration-guides" title="Permanent link">&para;</a></h3>
+<p>Look for "Upgrade Guide" or "Migration Guide" in:
+- Architecture documentation
+- API reference changes
+- Feature deprecation notices</p>
+<h2 id="development-vs-stable">Development vs. Stable<a class="headerlink" href="#development-vs-stable" title="Permanent link">&para;</a></h2>
+<h3 id="latest-development">Latest (Development)<a class="headerlink" href="#latest-development" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Documentation from <code>main</code> branch</li>
+<li>Contains new features in development</li>
+<li>May be unstable or subject to change</li>
+<li>Used for cutting-edge integration</li>
+</ul>
+<p>URL: <code>https://rodrigo0345.github.io/inesdb/latest/</code></p>
+<h3 id="stable-releases">Stable Releases<a class="headerlink" href="#stable-releases" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Official tagged versions</li>
+<li>Thoroughly tested and released</li>
+<li>Recommended for production use</li>
+<li>API stability guarantees (within major version)</li>
+</ul>
+<p>URL: <code>https://rodrigo0345.github.io/inesdb/v0.1.0/</code></p>
+<h2 id="using-versioned-apis">Using Versioned APIs<a class="headerlink" href="#using-versioned-apis" title="Permanent link">&para;</a></h2>
+<p>When integrating InesDB, always reference the specific version's documentation:</p>
+<p>```bash</p>
+<h1 id="clone-specific-version">Clone specific version<a class="headerlink" href="#clone-specific-version" title="Permanent link">&para;</a></h1>
+<p>git checkout v0.1.0</p>
+<h1 id="import-go-package-version-independent">Import Go package (version independent)<a class="headerlink" href="#import-go-package-version-independent" title="Permanent link">&para;</a></h1>
+<p>import "github.com/rodrigo0345/omag/internal/storage/btree"</p>
+<h1 id="refer-to-documentation-for-that-version">Refer to documentation for that version<a class="headerlink" href="#refer-to-documentation-for-that-version" title="Permanent link">&para;</a></h1>
+<h1 id="httpsrodrigo0345githubioinesdb010">https://rodrigo0345.github.io/inesdb/0.1.0/<a class="headerlink" href="#httpsrodrigo0345githubioinesdb010" title="Permanent link">&para;</a></h1>
+<p>```</p>
+<h2 id="documentation-quality-assurance">Documentation Quality Assurance<a class="headerlink" href="#documentation-quality-assurance" title="Permanent link">&para;</a></h2>
+<p>Each version's documentation is:</p>
+<ul>
+<li>✅ Generated from specific code version</li>
+<li>✅ Tested for broken links</li>
+<li>✅ Validated for API accuracy</li>
+<li>✅ Kept immutable after release</li>
+</ul>
+<h2 id="version-lifecycle">Version Lifecycle<a class="headerlink" href="#version-lifecycle" title="Permanent link">&para;</a></h2>
+<p>```
+Development (main)
+    ↓
+    ├─ v0.1.0 (release)
+    ├─ v0.2.0 (release)
+    ├─ v1.0.0 (major release)
+    └─ ... (more versions)</p>
+<p>Each version has its own documentation path
+All versions remain accessible
+```</p>
+<h2 id="deprecation-policy">Deprecation Policy<a class="headerlink" href="#deprecation-policy" title="Permanent link">&para;</a></h2>
+<h3 id="how-deprecations-work">How Deprecations Work<a class="headerlink" href="#how-deprecations-work" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Deprecated in</strong>: Feature marked as deprecated</li>
+<li><strong>Documentation</strong>: Warns in that version's docs</li>
+<li><strong>Duration</strong>: Remains for typically 3-4 releases or 1+ year</li>
+<li><strong>Removed in</strong>: Finally removed in future major version</li>
+</ol>
+<h3 id="finding-deprecation-info">Finding Deprecation Info<a class="headerlink" href="#finding-deprecation-info" title="Permanent link">&para;</a></h3>
+<p>In API documentation, look for:</p>
+<p><code>go
+// Deprecated: Use NewBufferPoolManager instead of NewBufferPool
+// Deprecated since: v0.2.0
+// Remove in: v1.0.0
+func NewBufferPool() { }</code></p>
+<h2 id="accessing-changelog">Accessing Changelog<a class="headerlink" href="#accessing-changelog" title="Permanent link">&para;</a></h2>
+<p>Each version documentation includes:</p>
+<ul>
+<li><strong>Release Notes</strong>: What changed in that version</li>
+<li><strong>Upgrade Path</strong>: Steps to upgrade from previous version</li>
+<li><strong>Breaking Changes</strong>: APIs that changed</li>
+<li><strong>New Features</strong>: Additions in that version</li>
+</ul>
+<h2 id="archive-and-long-term-support">Archive and Long-Term Support<a class="headerlink" href="#archive-and-long-term-support" title="Permanent link">&para;</a></h2>
+<h3 id="how-long-versions-are-kept">How Long Versions Are Kept<a class="headerlink" href="#how-long-versions-are-kept" title="Permanent link">&para;</a></h3>
+<ul>
+<li>All releases remain accessible indefinitely</li>
+<li>Documentation never changes after release</li>
+<li>Can always refer to old version docs</li>
+</ul>
+<h3 id="lts-long-term-support-versions">LTS (Long-Term Support) Versions<a class="headerlink" href="#lts-long-term-support-versions" title="Permanent link">&para;</a></h3>
+<p>Certain versions may be marked as LTS:</p>
+<ul>
+<li>v0.1.0-LTS</li>
+<li>v1.0.0-LTS</li>
+</ul>
+<p>These receive:
+- Extended security support
+- Additional documentation updates
+- Compatibility guarantees</p>
+<h2 id="building-local-documentation-for-specific-version">Building Local Documentation for Specific Version<a class="headerlink" href="#building-local-documentation-for-specific-version" title="Permanent link">&para;</a></h2>
+<p>```bash</p>
+<h1 id="checkout-specific-version">Checkout specific version<a class="headerlink" href="#checkout-specific-version" title="Permanent link">&para;</a></h1>
+<p>git checkout v0.1.0</p>
+<h1 id="install-dependencies">Install dependencies<a class="headerlink" href="#install-dependencies" title="Permanent link">&para;</a></h1>
+<p>pip install -r docs/requirements-docs.txt</p>
+<h1 id="build-documentation">Build documentation<a class="headerlink" href="#build-documentation" title="Permanent link">&para;</a></h1>
+<p>mkdocs serve -f docs/mkdocs.yml</p>
+<h1 id="view-at-httplocalhost8000">View at http://localhost:8000<a class="headerlink" href="#view-at-httplocalhost8000" title="Permanent link">&para;</a></h1>
+<p>```</p>
+<h2 id="troubleshooting-version-issues">Troubleshooting Version Issues<a class="headerlink" href="#troubleshooting-version-issues" title="Permanent link">&para;</a></h2>
+<h3 id="api-not-found-error">"API Not Found" Error<a class="headerlink" href="#api-not-found-error" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Check which version's documentation you're reading</li>
+<li>API may not exist in that version</li>
+<li>Try newer or older version</li>
+<li>Check migration guide for your version</li>
+</ul>
+<h3 id="version-mismatch">Version Mismatch<a class="headerlink" href="#version-mismatch" title="Permanent link">&para;</a></h3>
+<p>When code and documentation versions don't match:</p>
+<ol>
+<li>Identify your InesDB version: <code>git describe --tags</code></li>
+<li>Visit documentation for that version</li>
+<li>Report issue if documentation is outdated</li>
+</ol>
+<h3 id="missing-older-versions">Missing Older Versions<a class="headerlink" href="#missing-older-versions" title="Permanent link">&para;</a></h3>
+<p>All versions should be accessible. If not:</p>
+<ol>
+<li>Check GitHub releases page</li>
+<li>Verify git tags: <code>git tag -l</code></li>
+<li>Report missing version on GitHub Issues</li>
+</ol>
+<h2 id="contributing-version-updates">Contributing Version Updates<a class="headerlink" href="#contributing-version-updates" title="Permanent link">&para;</a></h2>
+<p>When contributing to documentation:</p>
+<ul>
+<li><strong>Latest only</strong>: PRs update <code>main</code> branch only</li>
+<li><strong>Release notes only</strong>: Add to release when tagging</li>
+<li><strong>No backporting</strong>: Old versions never updated</li>
+<li><strong>Future consistency</strong>: Changes apply to next release</li>
+</ul>
+<hr />
+<p><strong>Version Documentation Deployed</strong>: Every push to <code>main</code> and every release tag automatically generates and deploys documentation with proper versioning support.</p>
+<p><strong>Current Versions Available</strong>: Check the version selector in the navigation bar to see all available versions.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../packages/overview/" class="btn btn-neutral float-left" title="Overview"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../contributing/" class="btn btn-neutral float-right" title="Contributing">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../packages/overview/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../contributing/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+      <script src="../js/version-select.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

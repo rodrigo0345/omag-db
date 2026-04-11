@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Contributing - InesDB - Indexed Node Engine Storage</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../css/version-select.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Contributing";
+        var mkdocs_page_input_path = "contributing.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="..">
+          <img src="../logo.png" class="logo" alt="Logo"/>
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture/bplus-tree/">B+ Tree</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture/lsm-tree/">LSM Tree</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture/buffer-pool/">Buffer Pool</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture/transactions/">Transactions</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture/concurrency/">Concurrency</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Features</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../features/">Index</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">API Reference</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../api-reference/">Index</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../api/btree/">B+ Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../api/buffer-pool/">Buffer Pool API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../api/lsm-tree/">LSM Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../api/transactions/">Transactions API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../api/concurrency/">Concurrency API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Packages</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../packages/overview/">Overview</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Documentation</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../versioning/">Versioning</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Contributing</span></p>
+              <ul class="current">
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">Contributing</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#getting-started">Getting Started</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#prerequisites">Prerequisites</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#setting-up-development-environment">Setting Up Development Environment</a>
+    </li>
+        </ul>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">InesDB - Indexed Node Engine Storage</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Contributing</li>
+      <li class="breadcrumb-item active">Contributing</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/rodrigo0345/omag-db/edit/main/docs/contributing.md">Edit on inesdb</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="contributing">Contributing<a class="headerlink" href="#contributing" title="Permanent link">&para;</a></h1>
+<p>Thank you for your interest in contributing to InesDB! This guide will help you get started.</p>
+<h2 id="getting-started">Getting Started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h2>
+<h3 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Go 1.25 or later</li>
+<li>Git</li>
+<li>Linux, macOS, or WSL2 on Windows</li>
+</ul>
+<h3 id="setting-up-development-environment">Setting Up Development Environment<a class="headerlink" href="#setting-up-development-environment" title="Permanent link">&para;</a></h3>
+<p>```bash</p>
+<h1 id="clone-the-repository">Clone the repository<a class="headerlink" href="#clone-the-repository" title="Permanent link">&para;</a></h1>
+<p>git clone https://github.com/rodrigo0345/omag-db.git
+cd omag-db</p>
+<h1 id="install-dependencies">Install dependencies<a class="headerlink" href="#install-dependencies" title="Permanent link">&para;</a></h1>
+<p>go mod download</p>
+<h1 id="run-tests-to-verify-setup">Run tests to verify setup<a class="headerlink" href="#run-tests-to-verify-setup" title="Permanent link">&para;</a></h1>
+<p>go test ./...
+```</p>
+<h2 id="development-workflow">Development Workflow<a class="headerlink" href="#development-workflow" title="Permanent link">&para;</a></h2>
+<h3 id="branch-naming-convention">Branch Naming Convention<a class="headerlink" href="#branch-naming-convention" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Feature: <code>feature/description</code></li>
+<li>Bug fix: <code>fix/description</code></li>
+<li>Documentation: <code>docs/description</code></li>
+<li>Refactoring: <code>refactor/description</code></li>
+</ul>
+<p>Example: <code>feature/add-bloom-filter</code> or <code>fix/deadlock-detection</code></p>
+<h3 id="commit-messages">Commit Messages<a class="headerlink" href="#commit-messages" title="Permanent link">&para;</a></h3>
+<p>Follow conventional commits format:</p>
+<p>```
+<type>(<scope>): <subject></p>
+<body>
+
+<footer>
+```
+
+Types:
+- `feat`: New feature
+- `fix`: Bug fix
+- `docs`: Documentation only
+- `refactor`: Code restructuring
+- `test`: Adding or updating tests
+- `perf`: Performance improvements
+- `ci`: CI/CD changes
+
+Example:
+```
+feat(buffer): implement clock replacement policy
+
+Implement the clock algorithm for page replacement as an
+alternative to LRU. Reduces overhead while maintaining
+good performance for typical workloads.
+
+Closes #42
+```
+
+## Testing
+
+### Running Tests
+
+```bash
+# Run all tests
+go test ./...
+
+# Run with coverage
+go test -cover ./...
+
+# Run specific test
+go test -run TestName ./path/to/package
+
+# Run benchmarks
+go test -bench=. ./internal/concurrency/
+```
+
+### Test Coverage Requirements
+
+- Minimum 80% code coverage required
+- All public APIs must have tests
+- Focus on edge cases and error conditions
+
+### Writing Tests
+
+```go
+func TestFeatureName(t *testing.T) {
+    // Arrange: Setup test data
+    buffer := NewBufferPool(1000)
+
+    // Act: Execute the feature
+    page, err := buffer.GetPage(1)
+
+    // Assert: Verify results
+    if err != nil {
+        t.Fatalf("unexpected error: %v", err)
+    }
+    if page == nil {
+        t.Error("expected page, got nil")
+    }
+}
+
+func BenchmarkOperation(b *testing.B) {
+    buffer := NewBufferPool(1000)
+    b.ResetTimer()
+    for i := 0; i < b.N; i++ {
+        buffer.GetPage(pageID(i))
+    }
+}
+```
+
+## Code Style
+
+### Go Style Guide
+
+We follow the official [Go Code Review Comments](https://golang.org/doc/effective_go) and [Google's Go Style Guide](https://google.github.io/styleguide/go/).
+
+Key Points:
+- Use `gofmt` before committing
+- Keep functions small and focused
+- Document exported functions/types
+- Use meaningful variable names
+- Avoid unused variables and imports
+
+### Example
+
+```go
+// Good: Descriptive, follows conventions
+func (bpm *BufferPoolManager) GetPage(pageID PageID) (*Page, error) {
+    if pageID == InvalidPageID {
+        return nil, ErrInvalidPageID
+    }
+
+    cached, ok := bpm.cache[pageID]
+    if ok {
+        cached.increaseRefCount()
+        return cached, nil
+    }
+
+    return bpm.loadFromDisk(pageID)
+}
+
+// Bad: Unclear, doesn't follow conventions
+func (b *BufferPoolManager) get(p int) *Page {
+    x, _ := b.m[p]
+    if x != nil {
+        x.rc++
+    }
+    return x
+}
+```
+
+## Documentation
+
+### Code Comments
+
+- Document all exported functions, types, and constants
+- Include examples in documentation comments
+- Explain the "why", not just the "what"
+
+```go
+// PageID represents a unique identifier for a database page.
+// Valid PageID values start from 1; 0 is reserved as InvalidPageID.
+type PageID uint32
+
+// NewBufferPoolManager creates a new buffer pool manager with the specified
+// frame count. It initializes the LRU replacement policy and creates a disk
+// manager for persistent storage.
+//
+//  Example:
+//   bpm, err := NewBufferPoolManager(1000)
+//   if err != nil {
+//       log.Fatal(err)
+//   }
+//   page, err := bpm.GetPage(1)
+//
+func NewBufferPoolManager(frameCount int) (*BufferPoolManager, error) {
+    // ...
+}
+```
+
+### Documentation Files
+
+When adding significant features:
+1. Update relevant architecture documentation
+2. Add API reference if introducing new interfaces
+3. Include examples and use cases
+4. Document configuration parameters
+
+## Performance Considerations
+
+### Benchmarking
+
+Before submitting performance-critical changes:
+
+```bash
+# Run benchmarks
+go test -bench=. -benchmem ./path/to/package
+
+# Compare benchmarks
+go test -bench=. -benchmem ./path/to/package > new.txt
+# Use benchstat tool to compare: benchstat old.txt new.txt
+```
+
+### Guidelines
+
+- Minimize allocations in hot paths
+- Use sync.Pool for frequently allocated objects
+- Profile code using pprof: `go test -cpuprofile=cpu.prof`
+- Reduce lock contention in concurrent code
+
+## Pull Request Process
+
+1. **Fork and Create Branch**
+   ```bash
+   git checkout -b feature/your-feature
+   ```
+
+2. **Make Changes**
+   - Write tests for new functionality
+   - Update documentation
+   - Run `go fmt`, `go vet`, `golint`
+
+3. **Push and Create PR**
+   ```bash
+   git push origin feature/your-feature
+   ```
+
+4. **PR Checklist**
+   - [ ] Tests added/updated
+   - [ ] Documentation updated
+   - [ ] Code follows style guide
+   - [ ] No new linter warnings
+   - [ ] Commit messages follow convention
+   - [ ] Coverage ≥ 80%
+
+5. **Review Process**
+   - Address reviewer comments
+   - Push updates (don't force push to preserve history)
+   - Request re-review when ready
+
+## Reporting Issues
+
+### Bug Reports
+
+Include:
+- Go version (`go version`)
+- OS and architecture
+- Reproduction steps
+- Expected vs actual behavior
+- Error messages and stack traces
+
+```markdown
+## Bug Report
+
+### Environment
+- Go: 1.26.1
+- OS: Linux x86_64
+
+### Description
+Page eviction causes panic in cache validation
+
+### Steps to Reproduce
+1. Create buffer pool with 10 frames
+2. Insert 20 different pages
+3. Access page 1 again
+
+### Expected Behavior
+Page 1 should be restored from disk
+
+### Actual Behavior
+Panic: invalid page state
+
+### Error Output
+```
+panic: invalid page state
+goroutine 10 [running]:
+...
+```
+
+### Feature Requests
+
+Include:
+- Motivation and use case
+- Proposed solution (if any)
+- Alternatives considered
+- Expected performance impact
+
+## Resources
+
+- [Go Official Documentation](https://golang.org/doc/)
+- [Effective Go](https://golang.org/doc/effective_go)
+- [Google Go Style Guide](https://google.github.io/styleguide/go/)
+- [Database Systems Papers](https://github.com/rodrigo0345/omag-db/tree/main/docs/papers)
+
+## Community
+
+- Ask questions in GitHub Issues
+- Join discussions for design decisions
+- Help review other PRs
+
+Thank you for contributing to InesDB! 🙏
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../versioning/" class="btn btn-neutral float-left" title="Versioning"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../versioning/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+      <script src="../js/version-select.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

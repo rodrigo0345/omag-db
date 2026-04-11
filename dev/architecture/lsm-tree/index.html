@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>LSM Tree - InesDB - Indexed Node Engine Storage</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../../css/version-select.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "LSM Tree";
+        var mkdocs_page_input_path = "architecture/lsm-tree.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../..">
+          <img src="../../logo.png" class="logo" alt="Logo"/>
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../bplus-tree/">B+ Tree</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">LSM Tree</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#key-characteristics">Key Characteristics</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#architecture">Architecture</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#data-flow">Data Flow</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#write-path">Write Path</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#read-path">Read Path</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#sstables-sorted-string-tables">SSTables (Sorted String Tables)</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#bloom-filters">Bloom Filters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#compaction-strategy">Compaction Strategy</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#level-based-compaction">Level-Based Compaction</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#compaction-process">Compaction Process</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#performance-characteristics">Performance Characteristics</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#trade-offs-vs-b-tree">Trade-offs vs B+ Tree</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuration-parameters">Configuration Parameters</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../buffer-pool/">Buffer Pool</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../transactions/">Transactions</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../concurrency/">Concurrency</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Features</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../features/">Index</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">API Reference</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api-reference/">Index</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/btree/">B+ Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/buffer-pool/">Buffer Pool API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/lsm-tree/">LSM Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/transactions/">Transactions API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/concurrency/">Concurrency API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Packages</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../packages/overview/">Overview</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Documentation</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../versioning/">Versioning</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Contributing</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../contributing/">Contributing</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">InesDB - Indexed Node Engine Storage</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Architecture</li>
+      <li class="breadcrumb-item active">LSM Tree</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/rodrigo0345/omag-db/edit/main/docs/architecture/lsm-tree.md">Edit on inesdb</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="lsm-tree-backend">LSM Tree Backend<a class="headerlink" href="#lsm-tree-backend" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>The LSM (Log-Structured Merge) Tree is a write-optimized data structure designed for high-throughput insertion and update scenarios. It trades read performance for exceptional write performance through deferred merging.</p>
+<h2 id="key-characteristics">Key Characteristics<a class="headerlink" href="#key-characteristics" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Write-Optimized</strong>: Fast sequential writes to in-memory structures</li>
+<li><strong>Level-Based Structure</strong>: Multiple sorted runs at different levels</li>
+<li><strong>Asynchronous Compaction</strong>: Background merging of levels</li>
+<li><strong>Bloom Filters</strong>: Quick negative lookups to avoid unnecessary I/O</li>
+</ul>
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
+<p><code>┌─────────────────────────────────┐
+│ Memtable (In-Memory)            │
+│ - Red-Black Tree or SkipList    │
+│ - Sorted by key                 │
+│ - Fast writes and reads         │
+└────────────┬────────────────────┘
+             │ (when full)
+             ▼
+┌─────────────────────────────────┐
+│ Level 0 (On-Disk SSTables)      │
+│ - Multiple overlapping runs     │
+│ - Unsorted between runs         │
+│ - Uncompacted structure         │
+└────────────┬────────────────────┘
+             │ (Compaction)
+             ▼
+┌─────────────────────────────────┐
+│ Level 1 (On-Disk SSTables)      │
+│ - Sorted runs (no overlap)      │
+│ - Size ×10 of Level 0           │
+└────────────┬────────────────────┘
+             │ (Compaction)
+             ▼
+┌─────────────────────────────────┐
+│ Level 2, 3, ... (Final Levels)  │
+│ - Progressively larger          │
+│ - Minimal overlap               │
+└─────────────────────────────────┘</code></p>
+<h2 id="data-flow">Data Flow<a class="headerlink" href="#data-flow" title="Permanent link">&para;</a></h2>
+<h3 id="write-path">Write Path<a class="headerlink" href="#write-path" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Client writes key-value pair</li>
+<li>Write logged to WAL (for durability)</li>
+<li>Insert into memtable</li>
+<li>Return success to client</li>
+<li>Background: Eventually flush to Level 0</li>
+</ol>
+<p>Benefits: Single sequential write to WAL + one random write to memtable</p>
+<h3 id="read-path">Read Path<a class="headerlink" href="#read-path" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Check memtable first (fastest)</li>
+<li>Check L0 SSTables in reverse insertion order</li>
+<li>Check L1-Ln SSTables using binary search</li>
+<li>Use bloom filters to skip unnecessary SSTables</li>
+</ol>
+<h2 id="sstables-sorted-string-tables">SSTables (Sorted String Tables)<a class="headerlink" href="#sstables-sorted-string-tables" title="Permanent link">&para;</a></h2>
+<p>SSTables are immutable, sorted files containing key-value pairs:</p>
+<p><code>┌──────────────────────────────┐
+│ Header                       │
+│ - Version                    │
+│ - Key Range                  │
+│ - Bloom Filter               │
+├──────────────────────────────┤
+│ Data Blocks                  │
+│ - Index Block                │
+│ - Data entries               │
+├──────────────────────────────┤
+│ Footer                       │
+│ - Checksum                   │
+│ - Index offset               │
+│ - Metadata offset            │
+└──────────────────────────────┘</code></p>
+<h2 id="bloom-filters">Bloom Filters<a class="headerlink" href="#bloom-filters" title="Permanent link">&para;</a></h2>
+<p>Probabilistic data structures for efficient negative lookups:</p>
+<ul>
+<li><strong>False Positive</strong>: May indicate key exists when it doesn't</li>
+<li><strong>False Negative</strong>: Never occurs - if bloom says "no", key definitely absent</li>
+<li><strong>Performance</strong>: O(1) lookups avoiding unnecessary I/O</li>
+</ul>
+<h2 id="compaction-strategy">Compaction Strategy<a class="headerlink" href="#compaction-strategy" title="Permanent link">&para;</a></h2>
+<p>Compaction merges overlapping SSTables into larger files:</p>
+<h3 id="level-based-compaction">Level-Based Compaction<a class="headerlink" href="#level-based-compaction" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>L0 → L1</strong>: When L0 accumulates enough SSTables</li>
+<li><strong>L1 → L2</strong>: When L1 exceeds size limit</li>
+<li><strong>Ln → L(n+1)</strong>: Cascading up the levels</li>
+</ul>
+<p>Each level is typically 10x the size of the previous level.</p>
+<h3 id="compaction-process">Compaction Process<a class="headerlink" href="#compaction-process" title="Permanent link">&para;</a></h3>
+<p>```
+L0 Compactions (overlapping runs):
+SSTables at L0 ─┬─ Merge sort ─┐
+                └─ Combine    ──┴──► L1 SSTable</p>
+<p>Li → Li+1 Compaction (non-overlapping):
+L1 SSTables ────┬─ Merge sort ─┐
+                └─ Combine    ──┴──► L2 SSTable
+```</p>
+<h2 id="performance-characteristics">Performance Characteristics<a class="headerlink" href="#performance-characteristics" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Time Complexity</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Write</td>
+<td>O(log n) avg</td>
+<td>Amortized, due to compaction</td>
+</tr>
+<tr>
+<td>Read</td>
+<td>O(log n) + I/O</td>
+<td>Logarithmic seeks + block I/O</td>
+</tr>
+<tr>
+<td>Range Scan</td>
+<td>O(k log n)</td>
+<td>k results, requires level traversal</td>
+</tr>
+<tr>
+<td>Space</td>
+<td>O(n×1.1)</td>
+<td>Small overhead due to compaction</td>
+</tr>
+</tbody>
+</table>
+<h2 id="trade-offs-vs-b-tree">Trade-offs vs B+ Tree<a class="headerlink" href="#trade-offs-vs-b-tree" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>LSM Tree</th>
+<th>B+ Tree</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Writes</td>
+<td>Much faster</td>
+<td>Slower (random I/O)</td>
+</tr>
+<tr>
+<td>Reads</td>
+<td>Slower</td>
+<td>Faster</td>
+</tr>
+<tr>
+<td>Space Amp.</td>
+<td>Low</td>
+<td>Higher (balanced tree)</td>
+</tr>
+<tr>
+<td>Write Amp.</td>
+<td>High (compaction)</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>Range Scans</td>
+<td>Good</td>
+<td>Excellent</td>
+</tr>
+<tr>
+<td>Latency</td>
+<td>Variable</td>
+<td>Predictable</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-parameters">Configuration Parameters<a class="headerlink" href="#configuration-parameters" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Memtable Size</strong>: When to flush to L0 (affects write latency)</li>
+<li><strong>Level Size Multiplier</strong>: Ratio between consecutive levels (typically 10)</li>
+<li><strong>Target File Size</strong>: Size of SSTables at each level</li>
+<li><strong>Bloom Filter Bits</strong>: Bits per key for bloom filters (affects false positive rate)</li>
+<li><strong>Compaction Strategy</strong>: When and how to trigger compaction</li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../bplus-tree/" class="btn btn-neutral float-left" title="B+ Tree"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../buffer-pool/" class="btn btn-neutral float-right" title="Buffer Pool">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../bplus-tree/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../buffer-pool/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+      <script src="../../js/version-select.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

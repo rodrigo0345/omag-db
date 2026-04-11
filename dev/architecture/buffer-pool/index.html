@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Buffer Pool - InesDB - Indexed Node Engine Storage</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../../css/version-select.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Buffer Pool";
+        var mkdocs_page_input_path = "architecture/buffer-pool.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../..">
+          <img src="../../logo.png" class="logo" alt="Logo"/>
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../bplus-tree/">B+ Tree</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../lsm-tree/">LSM Tree</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">Buffer Pool</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#core-responsibilities">Core Responsibilities</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#architecture">Architecture</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#page-frame-states">Page Frame States</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#replacement-policies">Replacement Policies</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#lru-least-recently-used">LRU (Least Recently Used)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#clock-algorithm">Clock Algorithm</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#page-request-flow">Page Request Flow</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuration-parameters">Configuration Parameters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#concurrency-considerations">Concurrency Considerations</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#performance-optimization-tips">Performance Optimization Tips</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../transactions/">Transactions</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../concurrency/">Concurrency</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Features</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../features/">Index</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">API Reference</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api-reference/">Index</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/btree/">B+ Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/buffer-pool/">Buffer Pool API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/lsm-tree/">LSM Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/transactions/">Transactions API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/concurrency/">Concurrency API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Packages</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../packages/overview/">Overview</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Documentation</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../versioning/">Versioning</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Contributing</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../contributing/">Contributing</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">InesDB - Indexed Node Engine Storage</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Architecture</li>
+      <li class="breadcrumb-item active">Buffer Pool</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/rodrigo0345/omag-db/edit/main/docs/architecture/buffer-pool.md">Edit on inesdb</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="buffer-pool-manager">Buffer Pool Manager<a class="headerlink" href="#buffer-pool-manager" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>The Buffer Pool Manager is a critical component that caches pages in memory, reducing expensive disk I/O operations. It implements sophisticated page management and replacement policies.</p>
+<h2 id="core-responsibilities">Core Responsibilities<a class="headerlink" href="#core-responsibilities" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Page Caching</strong>: Keep hot pages in memory</li>
+<li><strong>Replacement Policy</strong>: Decide which pages to evict</li>
+<li><strong>Dirty Page Tracking</strong>: Monitor modified pages</li>
+<li><strong>Concurrency Control</strong>: Manage concurrent access to pages</li>
+<li><strong>Eviction Strategy</strong>: Flush dirty pages to disk when needed</li>
+</ol>
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
+<p><code>┌─────────────────────────────────────┐
+│ Buffer Pool Manager                 │
+├─────────────────────────────────────┤
+│  Page Request Handler               │
+│  ├─ Cache Lookup                    │
+│  ├─ Disk I/O (if needed)           │
+│  └─ Replacement Policy Driver       │
+├─────────────────────────────────────┤
+│  Page Table (Hash Map)              │
+│  ├─ Page ID → Page Frame mapping    │
+│  └─ Frame State Information         │
+├─────────────────────────────────────┤
+│  Replacement Policy                 │
+│  ├─ LRU Tracker                     │
+│  ├─ Clock Hand                      │
+│  └─ Eviction Queue                  │
+├─────────────────────────────────────┤
+│  Disk Manager Interface             │
+│  ├─ Read Requests                   │
+│  └─ Write Requests                  │
+└─────────────────────────────────────┘</code></p>
+<h2 id="page-frame-states">Page Frame States<a class="headerlink" href="#page-frame-states" title="Permanent link">&para;</a></h2>
+<p>Each page frame can be in one of several states:</p>
+<p><code>┌─────────┐
+                  │  FREE   │
+                  └────┬────┘
+                       │ (allocate)
+                  ┌────▼───────┐
+                  │  LOADING   │
+                  └────┬───────┘
+                       │ (I/O complete)
+                  ┌────▼──────────┐
+      ┌──────────►│  VALID         │◄────────┐
+      │           │ (potentially   │         │
+      │           │  both dirty    │         │
+      │           │  and pinned)   ├─────────┤
+      │           └────┬──────────┘ │ (unpin)
+      │                │            │
+      │ (unpin)        │(evict)     │
+      │                ▼            │
+      │           ┌─────────────┐   │
+      └───────────│ INVALIDATED │   │
+                  └─────────────┘   │
+                        ▲           │
+                        │(error)    │
+                        └───────────┘</code></p>
+<h2 id="replacement-policies">Replacement Policies<a class="headerlink" href="#replacement-policies" title="Permanent link">&para;</a></h2>
+<h3 id="lru-least-recently-used">LRU (Least Recently Used)<a class="headerlink" href="#lru-least-recently-used" title="Permanent link">&para;</a></h3>
+<p><code>Most Recent ◄──────────────────────► Least Recent
+    │                                     │
+ ┌──▼──┐  ┌──────┐  ┌──────┐  ┌────────▼┐
+ │ P5  │◄─┤ P3   │◄─┤ P1   │◄─┤ P2 (evict)
+ └─────┘  └──────┘  └──────┘  └─────────┘</code></p>
+<p>Algorithm:
+- On pg access: Move page to front of list
+- On eviction: Remove page from end of list
+- Time Complexity: O(1) with doubly-linked list</p>
+<p>Trade-offs:
+- <strong>Pros</strong>: Optimal in theory for many workloads
+- <strong>Cons</strong>: High overhead in practice (pointer manipulations)</p>
+<h3 id="clock-algorithm">Clock Algorithm<a class="headerlink" href="#clock-algorithm" title="Permanent link">&para;</a></h3>
+<p><code>┌─────────────┐
+         │    Page 1   │
+         │   ref = 0   │
+   ┌─────┤─────────────├─────┐
+   │     │↑ clock hand │     │
+   │  ┌──┴───────────┐ │     │
+   │  │  Page 2      │ │     │
+   │  │  ref = 1     │ │     │
+   │  └──────────────┘ │     │
+   │     ┌─────────────┤     │
+   │     │  Page 3     │     │
+   │     │  ref = 1    │     │
+   │  ┌──┴─────────────┘     │
+   │  │   ┌───────────────┐  │
+   │  └──►│  Page 4       │  │
+   │      │  ref = 0      │  │
+   │      └───────────────┘  │
+   │           ▲             │
+   └───────────┼─────────────┘
+               (link to next)</code></p>
+<p>Algorithm:
+1. Maintain circular buffer of pages
+2. Each page has reference bit
+3. Clock hand scans the buffer
+4. On page access: Set reference bit to 1
+5. On eviction: Clear ref bits scanning until finding ref=0</p>
+<p>Benefits:
+- <strong>Pros</strong>: Low overhead, approximates LRU well
+- <strong>Cons</strong>: Variable eviction time</p>
+<h2 id="page-request-flow">Page Request Flow<a class="headerlink" href="#page-request-flow" title="Permanent link">&para;</a></h2>
+<p><code>Page Request (page_id)
+          │
+          ▼
+   ┌─────────────────┐
+   │ In Buffer Pool? │
+   └────┬──────┬────┘
+        │yes   │no
+        │      │
+        │      ▼
+        │   ┌────────────┐
+        │   │ Read from  │
+        │   │ Disk       │
+        │   └──────┬─────┘
+        │          │
+        │          ▼
+        │   ┌────────────────┐
+        │   │ Space in       │
+        │   │ Buffer Pool?   │
+        │   └───┬────────┬───┘
+        │       │yes     │no
+        │       │        │
+        │       │        ▼
+        │       │   ┌──────────────────┐
+        │       │   │ Evict Page Using │
+        │       │   │ Replacement      │
+        │       │   │ Policy           │
+        │       │   └────────┬─────────┘
+        │       │            │
+        │       └────┬───────┘
+        │            ▼
+        │   ┌──────────────────┐
+        │   │ Write Dirty Page │
+        │   │ to Disk (if any) │
+        │   └────────┬─────────┘
+        │            │
+        △            △
+        └─────┬──────┘
+              │
+              ▼
+        ┌─────────────┐
+        │ Pin Page    │
+        │ in Buffer   │
+        └─────┬───────┘
+              │
+              ▼
+        ┌─────────────┐
+        │ Return Page │
+        │ Pointer     │
+        └─────────────┘</code></p>
+<h2 id="configuration-parameters">Configuration Parameters<a class="headerlink" href="#configuration-parameters" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Pool Size</strong>: Total number of page frames (e.g., 1000 frames for 4MB pool)</li>
+<li><strong>Page Size</strong>: Standard 4KB or configurable</li>
+<li><strong>Replacement Policy</strong>: LRU, Clock, or FIFO</li>
+<li><strong>Dirty Page Ratio</strong>: Threshold for background flush</li>
+<li><strong>Flush Interval</strong>: How often to write dirty pages</li>
+</ul>
+<h2 id="concurrency-considerations">Concurrency Considerations<a class="headerlink" href="#concurrency-considerations" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Pin Count</strong>: Track number of threads accessing a page</li>
+<li><strong>Page Locks</strong>: Read/Write locks for concurrent access</li>
+<li><strong>Preemptive Unpinning</strong>: Prevent deadlocks</li>
+<li><strong>Thread-Safe Operations</strong>: Atomic page table updates</li>
+</ul>
+<h2 id="performance-optimization-tips">Performance Optimization Tips<a class="headerlink" href="#performance-optimization-tips" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Cache Locality</strong>: Ensure working set fits in buffer pool</li>
+<li><strong>Appropriate Policy</strong>: LRU for general workloads, Clock for specialized</li>
+<li><strong>Prefetching</strong>: Load related pages proactively</li>
+<li><strong>Batching</strong>: Group I/O operations</li>
+<li><strong>Monitor Hits</strong>: Track cache hit ratio for tuning</li>
+</ol>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../lsm-tree/" class="btn btn-neutral float-left" title="LSM Tree"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../transactions/" class="btn btn-neutral float-right" title="Transactions">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../lsm-tree/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../transactions/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+      <script src="../../js/version-select.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

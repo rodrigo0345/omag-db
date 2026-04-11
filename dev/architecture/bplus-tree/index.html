@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>B+ Tree - InesDB - Indexed Node Engine Storage</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../../css/version-select.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "B+ Tree";
+        var mkdocs_page_input_path = "architecture/bplus-tree.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../..">
+          <img src="../../logo.png" class="logo" alt="Logo"/>
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">B+ Tree</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#key-characteristics">Key Characteristics</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#tree-structure">Tree Structure</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#internal-nodes">Internal Nodes</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#leaf-nodes">Leaf Nodes</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#page-management">Page Management</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#internal-page-format">Internal Page Format</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#leaf-page-format">Leaf Page Format</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#meta-page">Meta Page</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#operations">Operations</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#search-operation">Search Operation</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#insert-operation">Insert Operation</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#delete-operation">Delete Operation</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#page-merging-strategy">Page Merging Strategy</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#overflow-pages">Overflow Pages</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#compression-support">Compression Support</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#performance-characteristics">Performance Characteristics</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuration-parameters">Configuration Parameters</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../lsm-tree/">LSM Tree</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../buffer-pool/">Buffer Pool</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../transactions/">Transactions</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../concurrency/">Concurrency</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Features</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../features/">Index</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">API Reference</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api-reference/">Index</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/btree/">B+ Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/buffer-pool/">Buffer Pool API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/lsm-tree/">LSM Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/transactions/">Transactions API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/concurrency/">Concurrency API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Packages</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../packages/overview/">Overview</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Documentation</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../versioning/">Versioning</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Contributing</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../contributing/">Contributing</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">InesDB - Indexed Node Engine Storage</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Architecture</li>
+      <li class="breadcrumb-item active">B+ Tree</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/rodrigo0345/omag-db/edit/main/docs/architecture/bplus-tree.md">Edit on inesdb</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="b-tree-backend">B+ Tree Backend<a class="headerlink" href="#b-tree-backend" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>The B+ Tree backend is a classical implementation of a B+ tree data structure, optimized for disk-based storage. It supports efficient point lookups, range queries, and automatic balancing.</p>
+<h2 id="key-characteristics">Key Characteristics<a class="headerlink" href="#key-characteristics" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Balanced Tree</strong>: All leaves are at the same depth</li>
+<li><strong>Range Query Friendly</strong>: Linked leaf nodes enable efficient range scans</li>
+<li><strong>Variable-Size Records</strong>: Support for records larger than a page via overflow pages</li>
+<li><strong>Logarithmic Performance</strong>: O(log n) for search, insert, and delete operations</li>
+</ul>
+<h2 id="tree-structure">Tree Structure<a class="headerlink" href="#tree-structure" title="Permanent link">&para;</a></h2>
+<h3 id="internal-nodes">Internal Nodes<a class="headerlink" href="#internal-nodes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Contain keys and child pointers</li>
+<li>Direct all searches to appropriate child</li>
+<li>Automatically split when full</li>
+<li>Merge with siblings when underfull</li>
+</ul>
+<h3 id="leaf-nodes">Leaf Nodes<a class="headerlink" href="#leaf-nodes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Contain keys and actual data values (or references)</li>
+<li>Linked to adjacent leaf nodes for range traversal</li>
+<li>Can contain overflow page references for large records</li>
+<li>Sorted for sequential access</li>
+</ul>
+<h2 id="page-management">Page Management<a class="headerlink" href="#page-management" title="Permanent link">&para;</a></h2>
+<h3 id="internal-page-format">Internal Page Format<a class="headerlink" href="#internal-page-format" title="Permanent link">&para;</a></h3>
+<p><code>┌─────────────────────────────────┐
+│ Header (35 bytes)               │
+├─────────────────────────────────┤
+│ Keys: K1 | K2 | K3 | ... | Kn   │
+├─────────────────────────────────┤
+│ Pointers: P0|P1|P2|...|Pn       │
+└─────────────────────────────────┘</code></p>
+<p>Internal pages store alternating keys and child pointers. The first pointer P0 points to children with keys &lt; K1, P1 points to children with K1 &lt;= keys &lt; K2, and so on.</p>
+<h3 id="leaf-page-format">Leaf Page Format<a class="headerlink" href="#leaf-page-format" title="Permanent link">&para;</a></h3>
+<p><code>┌─────────────────────────────────┐
+│ Header (35 bytes)               │
+├─────────────────────────────────┤
+│ Keys: K1 | K2 | K3 | ... | Kn   │
+├─────────────────────────────────┤
+│ Values/References: V1|V2|...|Vn │
+└─────────────────────────────────┘</code></p>
+<h2 id="meta-page">Meta Page<a class="headerlink" href="#meta-page" title="Permanent link">&para;</a></h2>
+<p>Meta pages store tree-level metadata:</p>
+<p><code>┌──────────────────────────┐
+│ Magic Number             │
+│ (version checking)       │
+├──────────────────────────┤
+│ Root Page ID             │
+├──────────────────────────┤
+│ Page Count               │
+├──────────────────────────┤
+│ Max Page ID              │
+└──────────────────────────┘</code></p>
+<h2 id="operations">Operations<a class="headerlink" href="#operations" title="Permanent link">&para;</a></h2>
+<h3 id="search-operation">Search Operation<a class="headerlink" href="#search-operation" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Start at root</li>
+<li>Binary search keys in current node</li>
+<li>Follow appropriate child pointer</li>
+<li>Repeat until leaf node reached</li>
+<li>Binary search in leaf to find value</li>
+<li>If value spans overflow page, fetch additional pages</li>
+</ol>
+<h3 id="insert-operation">Insert Operation<a class="headerlink" href="#insert-operation" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Search to find leaf node</li>
+<li>Insert key-value pair in sorted order</li>
+<li>If leaf overflows:</li>
+<li>Split leaf into two nodes</li>
+<li>Promote middle key to parent</li>
+<li>If parent overflows, recursively split upward</li>
+<li>If root overflows, create new root</li>
+</ol>
+<h3 id="delete-operation">Delete Operation<a class="headerlink" href="#delete-operation" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Search to find key</li>
+<li>Remove from leaf node</li>
+<li>If leaf underflows:</li>
+<li>Try to borrow from sibling</li>
+<li>If borrowing fails, merge with sibling</li>
+<li>Recursively handle parent underflow</li>
+<li>If root becomes empty, lower tree height</li>
+</ol>
+<h2 id="page-merging-strategy">Page Merging Strategy<a class="headerlink" href="#page-merging-strategy" title="Permanent link">&para;</a></h2>
+<p>Empty pages are automatically merged to recover disk space:</p>
+<ul>
+<li><strong>Leaf Merging</strong>: Empty leaf nodes are merged with siblings</li>
+<li><strong>Internal Node Merging</strong>: Empty internal nodes are consolidated</li>
+<li><strong>Breadcrumb Stack</strong>: Maintains path information for efficient navigation during merge operations</li>
+</ul>
+<h2 id="overflow-pages">Overflow Pages<a class="headerlink" href="#overflow-pages" title="Permanent link">&para;</a></h2>
+<p>For records exceeding page size:</p>
+<ol>
+<li>Store main record in leaf/internal page</li>
+<li>Reference overflow page chain</li>
+<li>Overflow pages linked like leaf pages for sequential access</li>
+<li>Automatic cleanup when record is deleted</li>
+</ol>
+<h2 id="compression-support">Compression Support<a class="headerlink" href="#compression-support" title="Permanent link">&para;</a></h2>
+<p>The B+ Tree supports pluggable compression methods:</p>
+<ul>
+<li><strong>Row-wise Compression</strong>: Compress individual rows</li>
+<li><strong>Page-wise Compression</strong>: Compress entire page data</li>
+<li>Compression applied at storage level, transparent to tree logic</li>
+</ul>
+<h2 id="performance-characteristics">Performance Characteristics<a class="headerlink" href="#performance-characteristics" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Time Complexity</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Search</td>
+<td>O(log n)</td>
+<td>Requires height number of disk I/Os</td>
+</tr>
+<tr>
+<td>Insert</td>
+<td>O(log n)</td>
+<td>May trigger splits up the tree</td>
+</tr>
+<tr>
+<td>Delete</td>
+<td>O(log n)</td>
+<td>May trigger merges</td>
+</tr>
+<tr>
+<td>Range Scan</td>
+<td>O(k + log n)</td>
+<td>k is number of results</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-parameters">Configuration Parameters<a class="headerlink" href="#configuration-parameters" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Max Degree</strong>: Affects tree shape and disk I/O patterns</li>
+<li><strong>Page Size</strong>: Standard 4KB (configurable)</li>
+<li><strong>Overflow Threshold</strong>: Size limit before overflow pages needed</li>
+<li><strong>Merge Threshold</strong>: Occupancy percentage for triggering merges</li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../overview/" class="btn btn-neutral float-left" title="Overview"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../lsm-tree/" class="btn btn-neutral float-right" title="LSM Tree">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../overview/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../lsm-tree/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+      <script src="../../js/version-select.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

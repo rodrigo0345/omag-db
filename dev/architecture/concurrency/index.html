@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Concurrency - InesDB - Indexed Node Engine Storage</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../../css/version-select.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Concurrency";
+        var mkdocs_page_input_path = "architecture/concurrency.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../..">
+          <img src="../../logo.png" class="logo" alt="Logo"/>
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../bplus-tree/">B+ Tree</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../lsm-tree/">LSM Tree</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../buffer-pool/">Buffer Pool</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../transactions/">Transactions</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">Concurrency</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#concurrency-challenges">Concurrency Challenges</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#the-problem">The Problem</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#isolation-manager">Isolation Manager</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#lock-manager">Lock Manager</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#lock-request-queue">Lock Request Queue</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#wait-for-graph">Wait-for Graph</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#optimistic-concurrency-control-details">Optimistic Concurrency Control Details</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#validation-phase">Validation Phase</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#performance-trade-off">Performance Trade-off</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#mvcc-version-storage-overhead">MVCC - Version Storage Overhead</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#deadlock-resolution-strategies">Deadlock Resolution Strategies</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#strategy-1-victim-selection">Strategy 1: Victim Selection</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#strategy-2-wait-die-scheme">Strategy 2: Wait-Die Scheme</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#strategy-3-wound-wait-scheme">Strategy 3: Wound-Wait Scheme</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#performance-optimization">Performance Optimization</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#lock-granularity-trade-offs">Lock Granularity Trade-offs</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#adaptive-isolation">Adaptive Isolation</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#concurrency-metrics-to-monitor">Concurrency Metrics to Monitor</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuration-parameters">Configuration Parameters</a>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Features</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../features/">Index</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">API Reference</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api-reference/">Index</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/btree/">B+ Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/buffer-pool/">Buffer Pool API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/lsm-tree/">LSM Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/transactions/">Transactions API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/concurrency/">Concurrency API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Packages</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../packages/overview/">Overview</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Documentation</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../versioning/">Versioning</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Contributing</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../contributing/">Contributing</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">InesDB - Indexed Node Engine Storage</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Architecture</li>
+      <li class="breadcrumb-item active">Concurrency</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/rodrigo0345/omag-db/edit/main/docs/architecture/concurrency.md">Edit on inesdb</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="concurrency-control">Concurrency Control<a class="headerlink" href="#concurrency-control" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>InesDB's concurrency control layer ensures safe execution of multiple transactions simultaneously while maintaining data consistency and maximizing throughput.</p>
+<h2 id="concurrency-challenges">Concurrency Challenges<a class="headerlink" href="#concurrency-challenges" title="Permanent link">&para;</a></h2>
+<h3 id="the-problem">The Problem<a class="headerlink" href="#the-problem" title="Permanent link">&para;</a></h3>
+<p>Multiple transactions accessing the same data create several issues:</p>
+<p><code>Txn1: READ   X=10
+Txn2: READ   X=10
+Txn2: WRITE  X=20
+Txn1: WRITE  X=15
+Txn2: COMMIT
+Txn1: COMMIT
+Result: X=15  [Lost Update - Txn2's write lost!]</code></p>
+<h2 id="isolation-manager">Isolation Manager<a class="headerlink" href="#isolation-manager" title="Permanent link">&para;</a></h2>
+<p>Selects and enforces appropriate isolation strategy:</p>
+<p><code>Isolation Manager
+    │
+    ├─► MVCC Manager
+    │   ├─ Version tracking
+    │   ├─ Snapshot creation
+    │   └─ Version cleanup
+    │
+    ├─► OCC Manager
+    │   ├─ Read set tracking
+    │   ├─ Write set tracking
+    │   └─ Validation at commit
+    │
+    └─► 2PL Manager
+        ├─ Lock acquisition
+        ├─ Lock release
+        └─ Conflict detection</code></p>
+<h2 id="lock-manager">Lock Manager<a class="headerlink" href="#lock-manager" title="Permanent link">&para;</a></h2>
+<p>Central component for concurrency control:</p>
+<h3 id="lock-request-queue">Lock Request Queue<a class="headerlink" href="#lock-request-queue" title="Permanent link">&para;</a></h3>
+<p><code>Lock Request: (Resource, TxnId, Mode, Priority)
+              │
+              ▼
+     ┌────────────────────┐
+     │  Compatible with   │
+     │  current locks?    │
+     └────┬───────────┬───┘
+          │ yes       │ no
+          │           │
+          ▼           ▼
+    ┌──────────┐  ┌────────────┐
+    │   Grant  │  │   Queue    │
+    └──────────┘  │   Request  │
+                  └──────┬─────┘
+                         │
+                    (lock release)
+                         │
+                         ▼
+                   ┌─────────────┐
+                   │ Grant Next  │
+                   │ Queued Req. │
+                   └─────────────┘</code></p>
+<h2 id="wait-for-graph">Wait-for Graph<a class="headerlink" href="#wait-for-graph" title="Permanent link">&para;</a></h2>
+<p>Detects circular wait conditions (deadlocks):</p>
+<p>```
+Scenario:
+- Txn1 holds lock on R1, waits for R2
+- Txn2 holds lock on R2, waits for R3
+- Txn3 holds lock on R3, waits for R1</p>
+<p>Wait-for Graph:
+                    ┌─────┐
+                    │Txn1 │
+                    └──┬──┘
+                       │ waits for
+                       ▼
+           ┌─────┐   ┌─────┐
+           │Txn3 │   │Txn2 │
+           └──┬──┘   └──┬──┘
+      waits   │ waits    │ waits for
+        for   │          ▼
+              └─────────►R3
+                  R1
+                        R2</p>
+<p>Cycle: Txn1 → Txn2 → Txn3 → Txn1
+   Action: Abort one transaction
+```</p>
+<h2 id="optimistic-concurrency-control-details">Optimistic Concurrency Control Details<a class="headerlink" href="#optimistic-concurrency-control-details" title="Permanent link">&para;</a></h2>
+<h3 id="validation-phase">Validation Phase<a class="headerlink" href="#validation-phase" title="Permanent link">&para;</a></h3>
+<p>Three-step validation before commit:</p>
+<p>```
+1. Check Read Set Validness
+   ├─ For each (Object, Version) in read set
+   ├─ Verify version still valid
+   ├─ Verify no conflicting writes
+   └─ Abort if validation fails</p>
+<ol>
+<li>
+<p>Check Write Set Conflicts
+   ├─ For each (Object, New Value) in write set
+   ├─ Verify no other committed txn wrote it
+   ├─ Verify no other committed txn depends on old value
+   └─ Abort if conflict found</p>
+</li>
+<li>
+<p>Check Serialization Order
+   ├─ Verify transaction can be serialized
+   ├─ Ensure all dependencies respected
+   └─ Proceed if valid
+```</p>
+</li>
+</ol>
+<h3 id="performance-trade-off">Performance Trade-off<a class="headerlink" href="#performance-trade-off" title="Permanent link">&para;</a></h3>
+<p>```
+OCC Performance vs Conflict Rate:</p>
+<p>Throughput▲
+         │     ┌─────────────────┐
+         │    ╱                   ╲
+         │   ╱ OCC performs well  ╲
+         │  ╱ at low conflicts     ╲
+         │ ╱                        ╲
+         │╱<strong><em>_</em>_2PL (stable)</strong>___╲ Performance
+         │  2PL steady            ╲ Drop Zone
+         └─────────────────────────────────►
+             Conflict Rate
+```</p>
+<p>At high conflict rates: Frequent aborts hurt OCC, 2PL blocking is preferable</p>
+<h2 id="mvcc-version-storage-overhead">MVCC - Version Storage Overhead<a class="headerlink" href="#mvcc-version-storage-overhead" title="Permanent link">&para;</a></h2>
+<p>Each version requires metadata:</p>
+<p>```
+Key: "user:1000"
+Version History:</p>
+<p>[Version 1] ──────────────┐
+ Value: {name: "Alice"}   │
+ TxnStart: 100            │
+ TxnEnd: 150              ├─ Storage Overhead
+ Visible: [100-150]       │  ~30-50% per extra
+                          │  version in worst case
+[Version 2] ──────────────┤
+ Value: {name: "Bob"}     │
+ TxnStart: 151            │
+ TxnEnd: ∞                │
+ Visible: [151-∞]         │
+├───────────────────────────┘</p>
+<p>Total: 2 versions stored instead of 1
+Version overhead: key_size + value_size + metadata(~50 bytes)
+```</p>
+<h2 id="deadlock-resolution-strategies">Deadlock Resolution Strategies<a class="headerlink" href="#deadlock-resolution-strategies" title="Permanent link">&para;</a></h2>
+<h3 id="strategy-1-victim-selection">Strategy 1: Victim Selection<a class="headerlink" href="#strategy-1-victim-selection" title="Permanent link">&para;</a></h3>
+<p>Choose transaction to abort with minimal cost:</p>
+<p>```
+Candidates:
+- Txn1: 100 ms runtime, 50 rows modified
+- Txn2: 5 ms runtime, 2 rows modified ◄─ Lowest cost
+- Txn3: 200 ms runtime, 1000 rows modified</p>
+<p>Select Txn2 for abort (minimum cost)
+```</p>
+<h3 id="strategy-2-wait-die-scheme">Strategy 2: Wait-Die Scheme<a class="headerlink" href="#strategy-2-wait-die-scheme" title="Permanent link">&para;</a></h3>
+<p>Younger transactions wait, older ones die:</p>
+<p>```
+Old Transaction ──► Younger Transaction
+   Wait            (younger waits)</p>
+<p>Younger Transaction ──► Old Transaction
+   Die              (younger aborts)</p>
+<p>Properties:
+✓ No cyclic waits → No deadlock
+✓ Younger txns aborted (less work lost)
+✗ Livelock possible (repeated aborts)
+```</p>
+<h3 id="strategy-3-wound-wait-scheme">Strategy 3: Wound-Wait Scheme<a class="headerlink" href="#strategy-3-wound-wait-scheme" title="Permanent link">&para;</a></h3>
+<p>Older transactions aggressive, younger ones abort:</p>
+<p>```
+Old Transaction ──► Younger Transaction
+   Wounds          (younger aborts)</p>
+<p>Younger Transaction ──► Old Transaction
+   Waits             (younger waits)</p>
+<p>Properties:
+✓ No cyclic waits → No deadlock
+✓ Livelock prevented (older always proceed)
+✗ Older txns may be aborted unexpectedly
+```</p>
+<h2 id="performance-optimization">Performance Optimization<a class="headerlink" href="#performance-optimization" title="Permanent link">&para;</a></h2>
+<h3 id="lock-granularity-trade-offs">Lock Granularity Trade-offs<a class="headerlink" href="#lock-granularity-trade-offs" title="Permanent link">&para;</a></h3>
+<p><code>Page Level
+                           Locks Per Txn: ↑
+                           Lock Overhead: ↑
+                           Conflicts: ↓
+                                ▲
+                                │
+                           Record Level
+                           Locks Per Txn: ↑
+                           Lock Overhead: Medium
+                           Conflicts: Low
+                                ▲
+                                │
+                           Table Level
+                           Locks Per Txn: ↓
+                           Lock Overhead: ↓
+                           Conflicts: ↑</code></p>
+<h3 id="adaptive-isolation">Adaptive Isolation<a class="headerlink" href="#adaptive-isolation" title="Permanent link">&para;</a></h3>
+<p>Switch isolation levels based on workload:</p>
+<p>```
+READ UNCOMMITTED
+│
+├─ Conflict Rate High? ──► Upgrade to READ COMMITTED
+│
+└─ Conflict Rate Low? ────► May downgrade if needed</p>
+<p>Process:
+- Monitor conflict rate
+- Adapt isolation level dynamically
+- Balance consistency vs performance
+```</p>
+<h2 id="concurrency-metrics-to-monitor">Concurrency Metrics to Monitor<a class="headerlink" href="#concurrency-metrics-to-monitor" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Lock Contention Rate</strong>: % of lock requests that must wait</li>
+<li><strong>Deadlock Frequency</strong>: Deadlocks per second</li>
+<li><strong>Transaction Abort Rate</strong>: % aborted (OCC) or waiting (2PL)</li>
+<li><strong>Average Lock Hold Time</strong>: Duration of lock grants</li>
+<li><strong>Cache Hit Ratio</strong>: % of pages in buffer pool</li>
+<li><strong>Average Transaction Latency</strong>: End-to-end transaction time</li>
+</ul>
+<h2 id="configuration-parameters">Configuration Parameters<a class="headerlink" href="#configuration-parameters" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Lock Mode</strong>: Shared, Exclusive, Intent</li>
+<li><strong>Deadlock Detection Interval</strong>: How often to check for cycles</li>
+<li><strong>Lock Wait Timeout</strong>: Maximum wait before abort</li>
+<li><strong>Victim Selection Strategy</strong>: Which txn to abort</li>
+<li><strong>MVCC Retention</strong>: How many versions to keep</li>
+<li><strong>Version Cleanup</strong>: Frequency of garbage collection</li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../transactions/" class="btn btn-neutral float-left" title="Transactions"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../../features/" class="btn btn-neutral float-right" title="Index">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../transactions/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../../features/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+      <script src="../../js/version-select.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

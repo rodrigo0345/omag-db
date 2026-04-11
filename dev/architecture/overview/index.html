@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Overview - InesDB - Indexed Node Engine Storage</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../../css/version-select.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Overview";
+        var mkdocs_page_input_path = "architecture/overview.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../..">
+          <img src="../../logo.png" class="logo" alt="Logo"/>
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture</span></p>
+              <ul class="current">
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">Overview</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#architectural-layers">Architectural Layers</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#1-access-methods-layer">1. Access Methods Layer</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#2-buffer-pool-layer">2. Buffer Pool Layer</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#3-transaction-management-layer">3. Transaction Management Layer</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#4-concurrency-control-layer">4. Concurrency Control Layer</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#5-disk-manager-layer">5. Disk Manager Layer</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#page-layout">Page Layout</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#transaction-lifecycle">Transaction Lifecycle</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#data-flow">Data Flow</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#design-principles">Design Principles</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../bplus-tree/">B+ Tree</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../lsm-tree/">LSM Tree</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../buffer-pool/">Buffer Pool</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../transactions/">Transactions</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../concurrency/">Concurrency</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Features</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../features/">Index</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">API Reference</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api-reference/">Index</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/btree/">B+ Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/buffer-pool/">Buffer Pool API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/lsm-tree/">LSM Tree API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/transactions/">Transactions API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../api/concurrency/">Concurrency API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Packages</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../packages/overview/">Overview</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Documentation</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../versioning/">Versioning</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Contributing</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../contributing/">Contributing</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">InesDB - Indexed Node Engine Storage</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Architecture</li>
+      <li class="breadcrumb-item active">Overview</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/rodrigo0345/omag-db/edit/main/docs/architecture/overview.md">Edit on inesdb</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="architecture-overview">Architecture Overview<a class="headerlink" href="#architecture-overview" title="Permanent link">&para;</a></h1>
+<p>InesDB storage engine is built on a layered architecture that separates concerns and provides flexibility for different storage backends and transaction isolation strategies.</p>
+<h2 id="architectural-layers">Architectural Layers<a class="headerlink" href="#architectural-layers" title="Permanent link">&para;</a></h2>
+<h3 id="1-access-methods-layer">1. Access Methods Layer<a class="headerlink" href="#1-access-methods-layer" title="Permanent link">&para;</a></h3>
+<p>The access methods layer provides different ways to store and retrieve data efficiently:</p>
+<ul>
+<li><strong>B+ Tree Backend</strong>: A balanced tree structure optimized for both point queries and range scans</li>
+<li>Logarithmic time complexity for search, insert, and delete operations</li>
+<li>Efficient range queries through leaf node linking</li>
+<li>Automatic balancing through node splitting and merging</li>
+<li>
+<p>Support for overflow pages for large records</p>
+</li>
+<li>
+<p><strong>LSM Tree Backend</strong>: A log-structured merge tree optimized for write-heavy workloads</p>
+</li>
+<li>Write-optimized design with fast inserts</li>
+<li>Asynchronous compaction of levels</li>
+<li>Efficient range query support through sorted runs</li>
+</ul>
+<h3 id="2-buffer-pool-layer">2. Buffer Pool Layer<a class="headerlink" href="#2-buffer-pool-layer" title="Permanent link">&para;</a></h3>
+<p>The buffer pool manager sits between the access methods and disk manager:</p>
+<ul>
+<li><strong>Page Caching</strong>: Keeps frequently accessed pages in memory</li>
+<li><strong>Replacement Policies</strong>: Multiple strategies for evicting pages</li>
+<li><strong>LRU (Least Recently Used)</strong>: Evicts the least recently accessed page</li>
+<li><strong>Clock Algorithm</strong>: Efficient approximation of LRU with reduced overhead</li>
+<li><strong>Dirty Page Management</strong>: Tracks modified pages for write-back</li>
+<li><strong>Page Locks</strong>: Ensures consistency during concurrent reads/writes</li>
+</ul>
+<h3 id="3-transaction-management-layer">3. Transaction Management Layer<a class="headerlink" href="#3-transaction-management-layer" title="Permanent link">&para;</a></h3>
+<p>Provides ACID guarantees across operations:</p>
+<ul>
+<li><strong>Atomicity</strong>: All-or-nothing semantics via Write-Ahead Logging (WAL)</li>
+<li><strong>Consistency</strong>: Enforced through transaction isolation</li>
+<li><strong>Isolation</strong>: Multiple isolation levels (Repeatable Read, Serializable)</li>
+<li>MVCC for concurrency without blocking</li>
+<li>Optimistic Concurrency Control (OCC) for low-conflict workloads</li>
+<li>Two-Phase Locking (2PL) for high-conflict scenarios</li>
+<li><strong>Durability</strong>: Persistent logging via WAL</li>
+</ul>
+<h3 id="4-concurrency-control-layer">4. Concurrency Control Layer<a class="headerlink" href="#4-concurrency-control-layer" title="Permanent link">&para;</a></h3>
+<p>Manages concurrent transaction execution:</p>
+<ul>
+<li><strong>Lock Manager</strong>: Distributed deadlock detection</li>
+<li><strong>Wait-for Graphs</strong>: Detects and resolves circular dependencies</li>
+<li><strong>Isolation Managers</strong>: Implements different isolation strategies</li>
+<li>MVCC Manager: Multi-version concurrency control</li>
+<li>OCC Manager: Optimistic conflict detection</li>
+<li>2PL Manager: Pessimistic two-phase locking</li>
+</ul>
+<h3 id="5-disk-manager-layer">5. Disk Manager Layer<a class="headerlink" href="#5-disk-manager-layer" title="Permanent link">&para;</a></h3>
+<p>Handles persistent storage operations:</p>
+<ul>
+<li><strong>Page-Based I/O</strong>: Fixed-size page reads/writes</li>
+<li><strong>File Management</strong>: Manages data files and metadata</li>
+<li><strong>Page Allocation</strong>: Tracks available disk space</li>
+<li><strong>Recovery</strong>: Supports crash recovery through WAL replay</li>
+</ul>
+<h2 id="page-layout">Page Layout<a class="headerlink" href="#page-layout" title="Permanent link">&para;</a></h2>
+<p>InesDB uses a sophisticated slotted page format:</p>
+<p><code>┌─────────────────────────────────────┐
+│         Page Header                 │
+│  - Page ID                          │
+│  - Page Type (Leaf/Internal/Meta)  │
+│  - Free Space Pointer               │
+│  - Slot Count                       │
+│  - Right Neighbor Pointer           │
+│  - Magic Number (versioning)        │
+└─────────────────────────────────────┘
+│                                     │
+│  Slot Directory                     │
+│  ┌─────────────┐                   │
+│  │ Offset,Len  │  ← Entries        │
+│  ├─────────────┤                   │
+│  │ Offset,Len  │                   │
+│  └─────────────┘                   │
+│                                     │
+│  (Free Space)                       │
+│                                     │
+├─────────────────────────────────────┤
+│          Record Data                │
+│  (Variable-size records stored      │
+│   here, managed by slot directory)  │
+└─────────────────────────────────────┘</code></p>
+<h2 id="transaction-lifecycle">Transaction Lifecycle<a class="headerlink" href="#transaction-lifecycle" title="Permanent link">&para;</a></h2>
+<p>```
+1. BEGIN TRANSACTION
+   │
+   ├─ Create transaction ID
+   ├─ Set isolation level
+   └─ Initialize read/write sets</p>
+<ol>
+<li>
+<p>EXECUTE STATEMENTS
+   │
+   ├─ Acquire locks (depending on isolation level)
+   ├─ Read from pages or versions
+   ├─ Write to write-ahead log
+   └─ Update in-memory state</p>
+</li>
+<li>
+<p>COMMIT/ROLLBACK
+   │
+   ├─ If COMMIT:
+   │  ├─ Flush WAL to disk
+   │  ├─ Release locks
+   │  ├─ Update versions
+   │  └─ Mark committed in log
+   │
+   └─ If ROLLBACK:
+      ├─ Execute undo operations
+      ├─ Release locks
+      └─ Discard changes
+```</p>
+</li>
+</ol>
+<h2 id="data-flow">Data Flow<a class="headerlink" href="#data-flow" title="Permanent link">&para;</a></h2>
+<p><code>Application
+    │
+    ▼
+┌─────────────────────────┐
+│ Transaction Manager     │
+└────────────┬────────────┘
+             │
+    ┌────────┴────────┐
+    ▼                 ▼
+┌─────────┐      ┌──────────────┐
+│ Read    │      │ Write (WAL)  │
+└────┬────┘      └──────┬───────┘
+     │                  │
+     └──────────┬───────┘
+                ▼
+         ┌─────────────────┐
+         │ Isolation Mgr   │ ◄─┐
+         │ &amp; Lock Manager  │   │
+         └────────┬────────┘   │
+                  │            │
+                  ▼            │
+         ┌─────────────────┐   │
+         │ Buffer Pool     │───┘
+         │ - Cache pages   │
+         │ - Replace pages │
+         └────────┬────────┘
+                  │
+                  ▼
+         ┌─────────────────┐
+         │ Disk Manager    │
+         │ - Read/Write I/O│
+         └─────────────────┘</code></p>
+<h2 id="design-principles">Design Principles<a class="headerlink" href="#design-principles" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Separation of Concerns</strong>: Each layer handles a specific responsibility</li>
+<li><strong>Layered Isolation</strong>: Low-level changes don't affect high-level interfaces</li>
+<li><strong>Pluggable Components</strong>: Support multiple implementations (btree, lsm, isolation strategies)</li>
+<li><strong>Lock-Free Where Possible</strong>: Minimize contention for better concurrency</li>
+<li><strong>Durability First</strong>: All modifications logged before acknowledged to caller</li>
+</ol>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../.." class="btn btn-neutral float-left" title="Home"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../bplus-tree/" class="btn btn-neutral float-right" title="B+ Tree">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../.." style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../bplus-tree/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+      <script src="../../js/version-select.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
