@@ -42,7 +42,8 @@ const (
 
 	// internal cell header layout
 	// used to be able to store variable size records
-	CellKeyLenSize = 2 // 2 bytes for Key Length
-	CellValLenSize = 4 // 4 bytes for Value Length
-	CellHeaderSize = 6 // Total cell metadata size
+	CellKeyLenSize     = 2  // 2 bytes for Key Length
+	CellValLenSize     = 4  // 4 bytes for Value Length
+	CellOverflowIDSize = 8  // 8 bytes for Overflow Page ID (0 if no overflow)
+	CellHeaderSize     = 14 // Total cell metadata size (Key Len + Val Len + Overflow ID)
 )

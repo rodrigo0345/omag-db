@@ -3,6 +3,7 @@ package isolation
 import (
 	"fmt"
 
+	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/txn"
 	"github.com/rodrigo0345/omag/internal/txn/log"
@@ -16,7 +17,7 @@ type MVCCManager struct {
 	bufferManager   buffer.IBufferPoolManager
 	writeHandler    txn.WriteHandler     // For coordinating writes (optional WAL)
 	rollbackManager *txn.RollbackManager // For abort handling
-	primaryIndex    txn.StorageEngine
+	primaryIndex    storage.IStorageEngine
 	nextTxnID       int64
 	// TODO: Add version management, snapshot isolation, garbage collection
 }
@@ -27,7 +28,7 @@ func NewMVCCManager(
 	bufferMgr buffer.IBufferPoolManager,
 	writeHandler txn.WriteHandler,
 	rollbackMgr *txn.RollbackManager,
-	primaryIndex txn.StorageEngine,
+	primaryIndex storage.IStorageEngine,
 ) *MVCCManager {
 	return &MVCCManager{
 		transactions:    make(map[TransactionID]*txn.Transaction),

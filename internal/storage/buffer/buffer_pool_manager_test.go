@@ -12,18 +12,24 @@ func TestNewBufferPoolManager(t *testing.T) {
 
 	bpm := NewBufferPoolManager(10, dm)
 
-	if bpm.poolSize != 10 {
-		t.Fatalf("expected poolSize 10, got %d", bpm.poolSize)
+	switch v := bpm.(type) {
+	case *BufferPoolManager:
+		if v.poolSize != 10 {
+			t.Fatalf("expected poolSize 10, got %d", v.poolSize)
+		}
+		if len(v.frames) != 10 {
+			t.Fatalf("expected 10 frames, got %d", len(v.frames))
+		}
+		if len(v.freeList) != 10 {
+			t.Fatalf("expected 10 free frames, got %d", len(v.freeList))
+		}
+		if len(v.pageTable) != 0 {
+			t.Fatalf("expected empty pageTable, got %d entries", len(v.pageTable))
+		}
+	default:
+		t.Fatalf("expected BufferPoolManager type, got %T", bpm)
 	}
-	if len(bpm.frames) != 10 {
-		t.Fatalf("expected 10 frames, got %d", len(bpm.frames))
-	}
-	if len(bpm.freeList) != 10 {
-		t.Fatalf("expected 10 free frames, got %d", len(bpm.freeList))
-	}
-	if len(bpm.pageTable) != 0 {
-		t.Fatalf("expected empty pageTable, got %d entries", len(bpm.pageTable))
-	}
+
 }
 
 // TestNewPage tests new page allocation
@@ -400,5 +406,12 @@ func createTestDiskManager(t *testing.T) *DiskManager {
 // Helper function to create test buffer pool
 func createTestBufferPool(t *testing.T, poolSize int) *BufferPoolManager {
 	dm := createTestDiskManager(t)
-	return NewBufferPoolManager(poolSize, dm)
+	bfpoll := NewBufferPoolManager(poolSize, dm)
+	switch v := bfpoll.(type) {
+	case *BufferPoolManager:
+		return v
+	default:
+		t.Fatalf("expected BufferPoolManager type, got %T", bfpoll)
+		return nil
+	}
 }

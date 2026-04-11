@@ -21,6 +21,14 @@ func (m *mockBufferPoolManager) UnpinPage(pageID page.ResourcePageID, isDirty bo
 	return nil
 }
 
+func (m *mockBufferPoolManager) FlushAll() error {
+	return nil
+}
+
+func (m *mockBufferPoolManager) Close() error {
+	return nil
+}
+
 // TestNewRollbackManager tests rollback manager creation
 func TestNewRollbackManager(t *testing.T) {
 	mockBufMgr := &mockBufferPoolManager{}

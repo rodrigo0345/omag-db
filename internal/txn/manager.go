@@ -1,6 +1,7 @@
 package txn
 
 import (
+	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/txn/log"
 )
@@ -19,7 +20,7 @@ func NewTransactionManager(
 	isolationMgr IIsolationManager,
 	logMgr log.ILogManager,
 	bufferMgr buffer.IBufferPoolManager,
-	storage StorageEngine,
+	storage storage.IStorageEngine,
 ) *TransactionManager {
 	rollbackMgr := NewRollbackManager(bufferMgr)
 

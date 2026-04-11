@@ -6,8 +6,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/rodrigo0345/omag/internal/concurrency"
+	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/btree"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
+	"github.com/rodrigo0345/omag/internal/storage/lsm"
 	"github.com/rodrigo0345/omag/internal/txn"
 	"github.com/rodrigo0345/omag/internal/txn/isolation"
 	"github.com/rodrigo0345/omag/internal/txn/log"
@@ -20,9 +23,9 @@ const (
 
 // DatabaseTUI represents the database with 2PL isolation
 type DatabaseTUI struct {
-	storageEngine txn.StorageEngine     // BPlusTreeBackend
-	isolationMgr  txn.IIsolationManager // 2PL isolation
-	bufferPool    *buffer.BufferPoolManager
+	storageEngine storage.IStorageEngine // BPlusTreeBackend
+	isolationMgr  txn.IIsolationManager  // 2PL isolation
+	bufferPool    buffer.IBufferPoolManager
 	diskMgr       *buffer.DiskManager
 	walMgr        log.ILogManager
 }
@@ -35,7 +38,13 @@ func NewDatabaseTUI() (*DatabaseTUI, error) {
 		return nil, fmt.Errorf("disk manager: %w", err)
 	}
 
-	bufferPool := buffer.NewBufferPoolManager(50, diskMgr)
+	replacer := concurrency.NewLRUReplacer(50)
+
+	bufferPool := buffer.NewBufferPoolManagerWithReplacer(
+		50,
+		diskMgr,
+		replacer,
+	)
 
 	// WAL
 	walMgr, err := log.NewWALManager(walPath)
@@ -44,7 +53,8 @@ func NewDatabaseTUI() (*DatabaseTUI, error) {
 	}
 
 	// Storage Engine (pure - no transaction awareness)
-	storageEngine, err := btree.NewBPlusTreeBackend(bufferPool, diskMgr)
+	// storageEngine, err := btree.NewBPlusTreeBackend(bufferPool, diskMgr)
+	storageEngine := lsm.NewLSMTreeBackend(walMgr, bufferPool)
 	if err != nil {
 		return nil, fmt.Errorf("storage engine: %w", err)
 	}
@@ -126,7 +136,7 @@ func (db *DatabaseTUI) get(key string) error {
 	if err != nil {
 		return fmt.Errorf("read failed: %w", err)
 	}
-	if value == nil || len(value) == 0 {
+	if len(value) == 0 {
 		fmt.Printf("✗ Key not found: %s\n", key)
 		return nil
 	}

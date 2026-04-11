@@ -3,6 +3,7 @@ package isolation
 import (
 	"fmt"
 
+	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/txn"
 	"github.com/rodrigo0345/omag/internal/txn/log"
@@ -16,7 +17,7 @@ type TwoPhaseLockingManager struct {
 	bufferManager   buffer.IBufferPoolManager
 	writeHandler    txn.WriteHandler
 	rollbackManager *txn.RollbackManager
-	primaryIndex    txn.StorageEngine // TODO: missing secondary indexes
+	primaryIndex    storage.IStorageEngine
 }
 
 func NewTwoPhaseLockingManager(
@@ -24,7 +25,7 @@ func NewTwoPhaseLockingManager(
 	bufferMgr buffer.IBufferPoolManager,
 	writeHandler txn.WriteHandler,
 	rollbackMgr *txn.RollbackManager,
-	primaryIndex txn.StorageEngine,
+	primaryIndex storage.IStorageEngine,
 ) *TwoPhaseLockingManager {
 	return &TwoPhaseLockingManager{
 		transactions:    make(map[TransactionID]*txn.Transaction),
@@ -45,6 +46,12 @@ func (m *TwoPhaseLockingManager) BeginTransaction(isolationLevel uint8) int64 {
 }
 
 func (m *TwoPhaseLockingManager) Read(txnID int64, Key []byte) ([]byte, error) {
+	transaction, ok := m.transactions[TransactionID(txnID)]
+	if !ok {
+		return nil, fmt.Errorf("transaction %d not found", txnID)
+	}
+
+	transaction.AddSharedLock(Key)
 	return m.primaryIndex.Get(Key)
 }
 
@@ -54,15 +61,15 @@ func (m *TwoPhaseLockingManager) Write(txnID int64, Key []byte, Value []byte) er
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
 
-	// Create write operation for WriteHandler coordination
+	transaction.AddExclusiveLock(Key)
+
 	writeOp := txn.WriteOperation{
 		Key:    Key,
 		Value:  Value,
-		PageID: 0, // TODO: determine actual page ID from storage engine
-		Offset: 0, // TODO: determine actual offset within page
+		PageID: 0,
+		Offset: 0,
 	}
 
-	// WriteHandler coordinates: WAL logging (optional) → Storage.Put → UndoLog recording
 	return m.writeHandler.HandleWrite(transaction, writeOp)
 }
 
@@ -72,7 +79,7 @@ func (m *TwoPhaseLockingManager) Commit(txnID int64) error {
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
 
-	transaction.Commit() // Mark as committed
+	transaction.Commit()
 
 	if m.logManager != nil {
 		rec := &log.WALRecord{
@@ -84,11 +91,9 @@ func (m *TwoPhaseLockingManager) Commit(txnID int64) error {
 			return err
 		}
 
-		// Force flush on commit to ensure durability
 		m.logManager.Flush(lsn)
 	}
 
-	// Flush all dirty pages from buffer pool to disk
 	if m.bufferManager != nil {
 		if bpm, ok := m.bufferManager.(interface{ FlushAll() error }); ok {
 			bpm.FlushAll()
@@ -103,11 +108,10 @@ func (m *TwoPhaseLockingManager) Abort(txnID int64) error {
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
 
-	// Use RollbackManager to coordinate rollback
 	return m.rollbackManager.RollbackTransaction(
 		transaction,
-		nil, // onBeforeRollback callback
-		nil, // onAfterRollback callback
+		nil,
+		nil,
 	)
 }
 

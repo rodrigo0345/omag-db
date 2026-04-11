@@ -258,14 +258,16 @@ func (tree *BPlusTreeBackend) createNewRoot(oldRootID uint64, key []byte, rightC
 		return fmt.Errorf("pin meta page: %w", err)
 	}
 
-	// WAL for the meta page change.
-
 	metaPage.WLock()
 	copy(metaPage.GetData(), tree.meta.data)
 	metaPage.SetDirty(true)
 	metaPage.WUnlock()
 
-	return tree.bufferManager.UnpinPage(page.ResourcePageID(0), true)
+	if err := tree.bufferManager.UnpinPage(page.ResourcePageID(0), true); err != nil {
+		return err
+	}
+
+	return tree.SaveMetadataToDisk()
 }
 
 func getPageType(
