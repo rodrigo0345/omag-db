@@ -1,12 +1,14 @@
 package lsm
 
 type MemTable struct {
-	data map[string][]byte
+	data       map[string][]byte
+	tombstones map[string]bool // Track deleted keys; presence = true
 }
 
 func NewMemTable() *MemTable {
 	return &MemTable{
-		data: make(map[string][]byte),
+		data:       make(map[string][]byte),
+		tombstones: make(map[string]bool),
 	}
 }
 
@@ -19,16 +21,49 @@ func (m *MemTable) Get(key []byte) ([]byte, bool) {
 	return val, ok
 }
 
-// FlushMemTable converts the MemTable into an immutable SSTable and initializes its Bloom filter.
+func (m *MemTable) Exists(key []byte) bool {
+	keyStr := string(key)
+	_, inData := m.data[keyStr]
+	_, inTombstones := m.tombstones[keyStr]
+	return inData || inTombstones
+}
+
+func (m *MemTable) MarkTombstone(key []byte) {
+	keyStr := string(key)
+	m.tombstones[keyStr] = true
+	if _, ok := m.data[keyStr]; !ok {
+		m.data[keyStr] = nil // Placeholder so key appears in iteration
+	}
+}
+
+func (m *MemTable) IsTombstoned(key []byte) bool {
+	return m.tombstones[string(key)]
+}
+
 func FlushMemTable(id uint64, m *MemTable, falsePositiveRate float64) *SSTable {
 	bf := NewBloomFilter(uint(len(m.data)), falsePositiveRate)
 
-	// Create SSTable mock data and populate the Bloom filter
-	dataCopy := make(map[string][]byte)
-	for k, v := range m.data {
+	for k := range m.data {
 		bf.Add([]byte(k))
-		dataCopy[k] = v
 	}
 
-	return NewSSTable(id, dataCopy, bf)
+	sstable := NewSSTable(id, m.data, bf)
+	for k := range m.tombstones {
+		sstable.tombstones[k] = true
+	}
+	return sstable
+}
+
+func FlushMemTableFromMap(id uint64, data map[string][]byte, tombstones map[string]bool, falsePositiveRate float64) *SSTable {
+	bf := NewBloomFilter(uint(len(data)), falsePositiveRate)
+
+	for k := range data {
+		bf.Add([]byte(k))
+	}
+
+	sstable := NewSSTable(id, data, bf)
+	for k := range tombstones {
+		sstable.tombstones[k] = true
+	}
+	return sstable
 }

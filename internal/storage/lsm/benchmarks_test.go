@@ -6,24 +6,6 @@ import (
 	"testing"
 )
 
-// ============================================================================
-// LSM TREE BENCHMARKS - Using Go's built-in benchmark tool
-// ============================================================================
-//
-// Run benchmarks with:
-//   go test -bench=. -benchmem -benchtime=5s ./internal/storage/lsm
-//
-// This uses Go's internal benchmark infrastructure which:
-// - Automatically scales b.N to find meaningful run times
-// - Calculates statistics (min, max, avg, stddev)
-// - Reports allocation statistics (-benchmem)
-// - Provides reproducible, accurate measurements
-// ============================================================================
-
-// ============================================================================
-// BENCHMARK 1: SEQUENTIAL WRITES
-// ============================================================================
-
 func BenchmarkLSM_SequentialWrites(b *testing.B) {
 	lsm := createTestLSM(&testing.T{})
 	b.ReportAllocs()
@@ -35,10 +17,6 @@ func BenchmarkLSM_SequentialWrites(b *testing.B) {
 		lsm.Put(key, value)
 	}
 }
-
-// ============================================================================
-// BENCHMARK 2: RANDOM WRITES
-// ============================================================================
 
 func BenchmarkLSM_RandomWrites(b *testing.B) {
 	lsm := createTestLSM(&testing.T{})
@@ -54,14 +32,9 @@ func BenchmarkLSM_RandomWrites(b *testing.B) {
 	}
 }
 
-// ============================================================================
-// BENCHMARK 3: SEQUENTIAL READS
-// ============================================================================
-
 func BenchmarkLSM_SequentialReads(b *testing.B) {
 	lsm := createTestLSM(&testing.T{})
 
-	// Pre-populate with sequential keys
 	populateCount := 10000
 	for i := 0; i < populateCount; i++ {
 		key := []byte(fmt.Sprintf("seq_read_%010d", i))
@@ -77,15 +50,10 @@ func BenchmarkLSM_SequentialReads(b *testing.B) {
 	}
 }
 
-// ============================================================================
-// BENCHMARK 4: RANDOM READS
-// ============================================================================
-
 func BenchmarkLSM_RandomReads(b *testing.B) {
 	lsm := createTestLSM(&testing.T{})
 	rng := rand.New(rand.NewSource(123))
 
-	// Pre-populate with random keys
 	populateCount := 10000
 	for i := 0; i < populateCount; i++ {
 		randomID := rng.Intn(100000)
@@ -104,14 +72,9 @@ func BenchmarkLSM_RandomReads(b *testing.B) {
 	}
 }
 
-// ============================================================================
-// BENCHMARK 5: MIXED READ/WRITE (70% read, 30% write)
-// ============================================================================
-
 func BenchmarkLSM_MixedReadWrite(b *testing.B) {
 	lsm := createTestLSM(&testing.T{})
 
-	// Pre-populate
 	for i := 0; i < 1000; i++ {
 		key := []byte(fmt.Sprintf("mixed_%010d", i))
 		lsm.Put(key, []byte("value"))
@@ -137,10 +100,6 @@ func BenchmarkLSM_MixedReadWrite(b *testing.B) {
 	}
 }
 
-// ============================================================================
-// BENCHMARK 6: HOT/COLD KEY DISTRIBUTION (80% hot, 20% cold)
-// ============================================================================
-
 func BenchmarkLSM_HotColdDistribution(b *testing.B) {
 	lsm := createTestLSM(&testing.T{})
 
@@ -148,7 +107,6 @@ func BenchmarkLSM_HotColdDistribution(b *testing.B) {
 	hotKeyCount := 100 // 20% are hot
 	rng := rand.New(rand.NewSource(999))
 
-	// Pre-populate all keys
 	for i := 0; i < totalKeys; i++ {
 		key := []byte(fmt.Sprintf("hc_%010d", i))
 		lsm.Put(key, []byte("value"))
@@ -160,10 +118,8 @@ func BenchmarkLSM_HotColdDistribution(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		var keyID int
 		if rng.Float64() < 0.8 {
-			// Access hot keys
 			keyID = rng.Intn(hotKeyCount)
 		} else {
-			// Access cold keys
 			keyID = hotKeyCount + rng.Intn(totalKeys-hotKeyCount)
 		}
 
@@ -175,10 +131,6 @@ func BenchmarkLSM_HotColdDistribution(b *testing.B) {
 		}
 	}
 }
-
-// ============================================================================
-// BENCHMARK 7: LARGE VALUES (1KB, 10KB, 100KB)
-// ============================================================================
 
 func BenchmarkLSM_LargeValues_1KB(b *testing.B) {
 	lsm := createTestLSM(&testing.T{})
@@ -228,10 +180,6 @@ func BenchmarkLSM_LargeValues_100KB(b *testing.B) {
 	}
 }
 
-// ============================================================================
-// BENCHMARK 8: UPDATE-HEAVY (many updates to same keys)
-// ============================================================================
-
 func BenchmarkLSM_UpdateHeavy(b *testing.B) {
 	lsm := createTestLSM(&testing.T{})
 
@@ -251,10 +199,6 @@ func BenchmarkLSM_UpdateHeavy(b *testing.B) {
 		lsm.Put(keysToUpdate[keyIdx], value)
 	}
 }
-
-// ============================================================================
-// BENCHMARK 9: COMPACTION STRESS TEST (force multiple flushes)
-// ============================================================================
 
 func BenchmarkLSM_CompactionStress(b *testing.B) {
 	lsm := createTestLSM(&testing.T{})

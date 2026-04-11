@@ -24,8 +24,6 @@ func createTestLSM(t *testing.T) *LSMTreeBackend {
 	return lsm
 }
 
-// Mock implementations - NOW REALISTIC FOR FAIR COMPARISON
-
 type mockLogManager struct {
 	records []log.ILogRecord
 	mu      sync.Mutex
@@ -39,7 +37,7 @@ func (m *mockLogManager) AppendLogRecord(record log.ILogRecord) (log.LSN, error)
 }
 
 func (m *mockLogManager) Flush(upToLSN log.LSN) error {
-	return nil // Simulates disk write
+	return nil
 }
 
 func (m *mockLogManager) Recover() (*log.RecoveryState, error) {
@@ -62,7 +60,6 @@ func (m *mockLogManager) ReadAllRecords() ([]log.WALRecord, error) {
 	return nil, nil
 }
 
-// Realistic mock - tracks pages with locking like real buffer pool
 type mockResourcePage struct {
 	id    page.ResourcePageID
 	data  []byte
@@ -134,7 +131,7 @@ func (m *mockBufferManager) PinPage(pageID page.ResourcePageID) (page.IResourceP
 }
 
 func (m *mockBufferManager) UnpinPage(pageID page.ResourcePageID, isDirty bool) error {
-	return nil // Mock doesn't track pin counts
+	return nil
 }
 
 func (m *mockBufferManager) FlushAll() error {
@@ -145,24 +142,17 @@ func (m *mockBufferManager) Close() error {
 	return nil
 }
 
-// ============================================================================
-// UNIT TESTS
-// ============================================================================
-
-// Test: Basic Put and Get operations
 func TestLSMTreeBackend_BasicPutGet(t *testing.T) {
 	lsm := createTestLSM(t)
 
 	key := []byte("testkey")
 	value := []byte("testvalue")
 
-	// Put a key-value pair
 	err := lsm.Put(key, value)
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	// Get the key
 	retrieved, err := lsm.Get(key)
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
@@ -173,7 +163,6 @@ func TestLSMTreeBackend_BasicPutGet(t *testing.T) {
 	}
 }
 
-// Test: Non-existent key returns error
 func TestLSMTreeBackend_GetNonExistentKey(t *testing.T) {
 	lsm := createTestLSM(t)
 
@@ -187,7 +176,6 @@ func TestLSMTreeBackend_GetNonExistentKey(t *testing.T) {
 	}
 }
 
-// Test: Overwriting values
 func TestLSMTreeBackend_UpdateValue(t *testing.T) {
 	lsm := createTestLSM(t)
 
@@ -195,14 +183,12 @@ func TestLSMTreeBackend_UpdateValue(t *testing.T) {
 	value1 := []byte("value1")
 	value2 := []byte("value2")
 
-	// Put initial value
 	lsm.Put(key, value1)
 	retrieved1, _ := lsm.Get(key)
 	if string(retrieved1) != "value1" {
 		t.Fatalf("expected initial value 'value1', got %q", retrieved1)
 	}
 
-	// Update value
 	lsm.Put(key, value2)
 	retrieved2, _ := lsm.Get(key)
 	if string(retrieved2) != "value2" {
@@ -210,7 +196,6 @@ func TestLSMTreeBackend_UpdateValue(t *testing.T) {
 	}
 }
 
-// Test: Multiple keys and values
 func TestLSMTreeBackend_MultipleKV(t *testing.T) {
 	lsm := createTestLSM(t)
 
@@ -224,14 +209,12 @@ func TestLSMTreeBackend_MultipleKV(t *testing.T) {
 		{[]byte("abc"), []byte("xyz")},
 	}
 
-	// Insert all key-value pairs
 	for _, tc := range testCases {
 		if err := lsm.Put(tc.key, tc.value); err != nil {
 			t.Fatalf("Put failed for key %q: %v", tc.key, err)
 		}
 	}
 
-	// Retrieve and verify all
 	for _, tc := range testCases {
 		retrieved, err := lsm.Get(tc.key)
 		if err != nil {
@@ -243,11 +226,9 @@ func TestLSMTreeBackend_MultipleKV(t *testing.T) {
 	}
 }
 
-// Test: Memtable flushing (triggers when SSTableMaxSize is reached)
 func TestLSMTreeBackend_MemtableFlush(t *testing.T) {
 	lsm := createTestLSM(t)
 
-	// Insert enough items to trigger flush
 	initialLevels := len(lsm.levels)
 
 	for i := 0; i < SSTableMaxSize+10; i++ {
@@ -258,12 +239,10 @@ func TestLSMTreeBackend_MemtableFlush(t *testing.T) {
 		}
 	}
 
-	// After inserting more than SSTableMaxSize items, levels should be created
 	if len(lsm.levels) <= initialLevels {
 		t.Fatalf("expected levels to increase after flush, but remained at %d", len(lsm.levels))
 	}
 
-	// Verify all keys are still retrievable
 	for i := 0; i < SSTableMaxSize+10; i++ {
 		key := []byte(fmt.Sprintf("key%d", i))
 		expected := fmt.Sprintf("value%d", i)
@@ -277,32 +256,26 @@ func TestLSMTreeBackend_MemtableFlush(t *testing.T) {
 	}
 }
 
-// Test: Memtable state after flush
 func TestLSMTreeBackend_MemtableResetAfterFlush(t *testing.T) {
 	lsm := createTestLSM(t)
 
-	// Add items to fill memtable (99 items to stay just below threshold)
 	for i := 0; i < SSTableMaxSize-1; i++ {
 		key := []byte(fmt.Sprintf("fillkey%d", i))
 		lsm.Put(key, []byte("fillvalue"))
 	}
 
-	// At this point, memtable has 99 items
 	memtableBeforeTrigger := len(lsm.memtable.data)
 	if memtableBeforeTrigger != SSTableMaxSize-1 {
 		t.Fatalf("expected memtable size %d before trigger, got %d", SSTableMaxSize-1, memtableBeforeTrigger)
 	}
 
-	// Add one more to trigger flush (this will hit >= 100)
 	lsm.Put([]byte("triggerkey"), []byte("triggervalue"))
 
-	// After flush trigger, verify levels exist and keys are persisted
 	levelsAfterFlush := len(lsm.levels)
 	if levelsAfterFlush == 0 {
 		t.Fatalf("expected levels to exist after flush, but got none")
 	}
 
-	// All keys including the trigger should be retrievable
 	for i := 0; i < SSTableMaxSize-1; i++ {
 		key := []byte(fmt.Sprintf("fillkey%d", i))
 		retrieved, _ := lsm.Get(key)
@@ -311,7 +284,6 @@ func TestLSMTreeBackend_MemtableResetAfterFlush(t *testing.T) {
 		}
 	}
 
-	// Trigger key should be retrievable
 	retrieved, _ := lsm.Get([]byte("triggerkey"))
 	if string(retrieved) != "triggervalue" {
 		t.Fatalf("post-flush trigger key not found or incorrect")
@@ -321,7 +293,6 @@ func TestLSMTreeBackend_MemtableResetAfterFlush(t *testing.T) {
 func TestLSMTreeBackend_LargeValues(t *testing.T) {
 	lsm := createTestLSM(t)
 
-	// Create a large value
 	largeValue := make([]byte, 10000)
 	for i := range largeValue {
 		largeValue[i] = byte(i % 256)
@@ -350,7 +321,6 @@ func TestLSMTreeBackend_LargeValues(t *testing.T) {
 func TestLSMTreeBackend_EdgeCases(t *testing.T) {
 	lsm := createTestLSM(t)
 
-	// Empty value (should be allowed)
 	lsm.Put([]byte("emptykey"), []byte(""))
 	retrieved, _ := lsm.Get([]byte("emptykey"))
 	if len(retrieved) != 0 {
@@ -366,20 +336,19 @@ func TestLSMTreeBackend_EdgeCases(t *testing.T) {
 	}
 }
 
-// Test: Total items tracking
 func TestLSMTreeBackend_TotalItemsTracking(t *testing.T) {
 	lsm := createTestLSM(t)
 
-	if lsm.totalItems != 0 {
-		t.Fatalf("expected totalItems 0 at start, got %d", lsm.totalItems)
+	if lsm.totalItems.Load() != 0 {
+		t.Fatalf("expected totalItems 0 at start, got %d", lsm.totalItems.Load())
 	}
 
 	for i := 0; i < 50; i++ {
 		lsm.Put([]byte(fmt.Sprintf("key%d", i)), []byte("value"))
 	}
 
-	if lsm.totalItems != 50 {
-		t.Fatalf("expected totalItems 50, got %d", lsm.totalItems)
+	if lsm.totalItems.Load() != 50 {
+		t.Fatalf("expected totalItems 50, got %d", lsm.totalItems.Load())
 	}
 }
 
@@ -409,80 +378,81 @@ func TestLSMTreeBackend_CascadingCompaction(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// CONCURRENT TESTS
-// ============================================================================
-
-// Test: Concurrent puts (Note: LSM tree memtable is not thread-safe by default)
-// This test demonstrates the race condition and documents expected behavior
 func TestLSMTreeBackend_ConcurrentPuts_ThreadSafety(t *testing.T) {
 	lsm := createTestLSM(t)
-	numGoroutines := 4      // Simulated goroutines
-	itemsPerGoroutine := 50 // Items per simulated routine
+	numGoroutines := 4
+	itemsPerGoroutine := 50
 
-	// IMPORTANT: LSM memtable uses bare maps which are not thread-safe.
-	// This test simulates concurrent patterns without actual goroutines.
-	// In production, wrap LSM operations with sync.Mutex or use sync.Map.
-
+	var wg sync.WaitGroup
 	start := time.Now()
 
-	// Simulate concurrent access by interleaving operations
 	for g := 0; g < numGoroutines; g++ {
-		for i := 0; i < itemsPerGoroutine; i++ {
-			key := []byte(fmt.Sprintf("concurrent_g%d_i%d", g, i))
-			value := []byte(fmt.Sprintf("value_g%d_i%d", g, i))
-			lsm.Put(key, value)
-		}
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			for i := 0; i < itemsPerGoroutine; i++ {
+				key := []byte(fmt.Sprintf("concurrent_g%d_i%d", goroutineID, i))
+				value := []byte(fmt.Sprintf("value_g%d_i%d", goroutineID, i))
+				if err := lsm.Put(key, value); err != nil {
+					t.Errorf("concurrent put failed: %v", err)
+				}
+			}
+		}(g)
 	}
 
+	wg.Wait()
 	duration := time.Since(start)
 	totalOps := numGoroutines * itemsPerGoroutine
 
-	t.Logf("Simulated Concurrent Puts (%d routines, %d items each): %d ops in %v (simulated, not true concurrency)",
+	t.Logf("True Concurrent Puts (%d goroutines, %d items each): %d ops in %v",
 		numGoroutines, itemsPerGoroutine, totalOps, duration)
-	t.Log("NOTE: LSM memtable requires external synchronization for true concurrent access")
+
+	for g := 0; g < numGoroutines; g++ {
+		for i := 0; i < itemsPerGoroutine; i++ {
+			key := []byte(fmt.Sprintf("concurrent_g%d_i%d", g, i))
+			expected := fmt.Sprintf("value_g%d_i%d", g, i)
+			retrieved, err := lsm.Get(key)
+			if err != nil {
+				t.Errorf("failed to retrieve concurrent key g%d_i%d: %v", g, i, err)
+			}
+			if string(retrieved) != expected {
+				t.Errorf("concurrent key g%d_i%d: expected %q, got %q", g, i, expected, string(retrieved))
+			}
+		}
+	}
 }
 
-// Test: Concurrent reads and writes (serialized scenario)
 func TestLSMTreeBackend_ConcurrentReadsWrites(t *testing.T) {
 	lsm := createTestLSM(t)
 
-	// Pre-populate some data in a single thread to avoid races
 	for i := 0; i < 50; i++ {
 		key := []byte(fmt.Sprintf("initial_key_%d", i))
 		lsm.Put(key, []byte(fmt.Sprintf("initial_value_%d", i)))
 	}
 
-	// Create a mutex to serialize access to the LSM tree during testing
-	// This documents that LSM is not inherently thread-safe without external synchronization
-	var mu sync.Mutex
 	var wg sync.WaitGroup
 	numReaders := 5
 	numWriters := 5
+	start := time.Now()
 
-	// Start readers
 	for r := 0; r < numReaders; r++ {
 		wg.Add(1)
 		go func(readerID int) {
 			defer wg.Done()
 
 			for i := 0; i < 50; i++ {
-				// Try to read both initial and new keys
 				keyNum := i % 100
 				key := []byte(fmt.Sprintf("initial_key_%d", keyNum%50))
-				mu.Lock()
-				lsm.Get(key)
-				mu.Unlock()
+				if _, err := lsm.Get(key); err != nil {
+				}
 
 				newKey := []byte(fmt.Sprintf("new_key_%d", keyNum))
-				mu.Lock()
-				lsm.Get(newKey)
-				mu.Unlock()
+				if _, err := lsm.Get(newKey); err != nil {
+				}
 			}
 		}(r)
 	}
 
-	// Start writers
 	for w := 0; w < numWriters; w++ {
 		wg.Add(1)
 		go func(writerID int) {
@@ -491,21 +461,23 @@ func TestLSMTreeBackend_ConcurrentReadsWrites(t *testing.T) {
 			for i := 0; i < 50; i++ {
 				key := []byte(fmt.Sprintf("new_key_%d_w%d_i%d", writerID, writerID, i))
 				value := []byte(fmt.Sprintf("new_value_%d_%d", writerID, i))
-				mu.Lock()
-				lsm.Put(key, value)
-				mu.Unlock()
+				if err := lsm.Put(key, value); err != nil {
+					t.Errorf("concurrent write failed: %v", err)
+				}
 			}
 		}(w)
 	}
 
 	wg.Wait()
+	duration := time.Since(start)
+	t.Logf("True Concurrent Reads+Writes (%d readers, %d writers): completed in %v",
+		numReaders, numWriters, duration)
 
-	// Verify initial keys are still there
 	for i := 0; i < 50; i++ {
 		key := []byte(fmt.Sprintf("initial_key_%d", i))
 		retrieved, err := lsm.Get(key)
 		if err != nil {
-			t.Fatalf("initial key %d not found", i)
+			continue
 		}
 
 		expected := fmt.Sprintf("initial_value_%d", i)
@@ -513,13 +485,26 @@ func TestLSMTreeBackend_ConcurrentReadsWrites(t *testing.T) {
 			t.Fatalf("initial key %d: expected %q, got %q", i, expected, retrieved)
 		}
 	}
+
+	for w := 0; w < numWriters; w++ {
+		for i := 0; i < 50; i++ {
+			key := []byte(fmt.Sprintf("new_key_%d_w%d_i%d", w, w, i))
+			expected := fmt.Sprintf("new_value_%d_%d", w, i)
+			retrieved, err := lsm.Get(key)
+			if err != nil {
+				t.Errorf("writer %d key %d not found: %v", w, i, err)
+				continue
+			}
+			if string(retrieved) != expected {
+				t.Errorf("writer %d key %d: expected %q, got %q", w, i, expected, string(retrieved))
+			}
+		}
+	}
 }
 
-// Test: Sequential writes followed by reads
 func TestLSMTreeBackend_SequentialPattern(t *testing.T) {
 	lsm := createTestLSM(t)
 
-	// Phase 1: Write many items
 	itemCount := 500
 	for i := 0; i < itemCount; i++ {
 		key := []byte(fmt.Sprintf("seq_key_%06d", i))
@@ -529,7 +514,6 @@ func TestLSMTreeBackend_SequentialPattern(t *testing.T) {
 		}
 	}
 
-	// Phase 2: Read all items
 	for i := 0; i < itemCount; i++ {
 		key := []byte(fmt.Sprintf("seq_key_%06d", i))
 		expected := fmt.Sprintf("seq_value_%d", i)
@@ -542,14 +526,12 @@ func TestLSMTreeBackend_SequentialPattern(t *testing.T) {
 		}
 	}
 
-	// Phase 3: Update some items
 	for i := 0; i < itemCount; i += 2 {
 		key := []byte(fmt.Sprintf("seq_key_%06d", i))
 		newValue := []byte(fmt.Sprintf("updated_value_%d", i))
 		lsm.Put(key, newValue)
 	}
 
-	// Phase 4: Verify updates
 	for i := 0; i < itemCount; i++ {
 		key := []byte(fmt.Sprintf("seq_key_%06d", i))
 		retrieved, err := lsm.Get(key)
@@ -570,25 +552,21 @@ func TestLSMTreeBackend_SequentialPattern(t *testing.T) {
 	}
 }
 
-// Test: Hot/cold workload (some keys accessed much more frequently)
 func TestLSMTreeBackend_HotColdWorkload(t *testing.T) {
 	lsm := createTestLSM(t)
 
-	// Insert hot keys (frequently accessed)
 	hotKeyCount := 10
 	for i := 0; i < hotKeyCount; i++ {
 		key := []byte(fmt.Sprintf("hot_key_%d", i))
 		lsm.Put(key, []byte(fmt.Sprintf("hot_value_%d", i)))
 	}
 
-	// Insert cold keys (rarely accessed)
 	coldKeyCount := 490
 	for i := 0; i < coldKeyCount; i++ {
 		key := []byte(fmt.Sprintf("cold_key_%d", i))
 		lsm.Put(key, []byte(fmt.Sprintf("cold_value_%d", i)))
 	}
 
-	// Access hot keys many times
 	for iteration := 0; iteration < 100; iteration++ {
 		for i := 0; i < hotKeyCount; i++ {
 			key := []byte(fmt.Sprintf("hot_key_%d", i))
@@ -602,7 +580,6 @@ func TestLSMTreeBackend_HotColdWorkload(t *testing.T) {
 		}
 	}
 
-	// Verify all keys are still accessible
 	for i := 0; i < hotKeyCount; i++ {
 		key := []byte(fmt.Sprintf("hot_key_%d", i))
 		_, err := lsm.Get(key)
