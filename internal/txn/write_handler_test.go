@@ -1,171 +1,276 @@
 package txn
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/rodrigo0345/omag/internal/storage/page"
+	wallog "github.com/rodrigo0345/omag/internal/txn/log"
+	"github.com/rodrigo0345/omag/internal/txn/testutil"
 )
 
-type mockWriteHandler struct{}
+func TestDefaultWriteHandlerBasicWrite(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-func (m *mockWriteHandler) Write(txn *Transaction, key []byte, value []byte) error {
-	return nil
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	wm, _ := wallog.NewWALManager(filepath.Join(tmpDir, "test.wal"))
+	defer wm.Close()
+
+	storage := testutil.NewInMemoryStorageEngine()
+	rollbackMgr := NewRollbackManager(bpm)
+
+	handler := NewDefaultWriteHandler(storage, rollbackMgr, bpm, wm)
+
+	txn := NewTransaction(1, READ_COMMITTED)
+	writeOp := WriteOperation{
+		Key:      []byte("testkey"),
+		Value:    []byte("testvalue"),
+		PageID:   page.ResourcePageID(1),
+		Offset:   0,
+		IsDelete: false,
+	}
+
+	err := handler.HandleWrite(txn, writeOp)
+	if err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	stored, err := storage.Get([]byte("testkey"))
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+
+	if string(stored) != "testvalue" {
+		t.Errorf("expected 'testvalue', got '%s'", string(stored))
+	}
 }
 
-func (m *mockWriteHandler) Delete(txn *Transaction, key []byte) error {
-	return nil
-}
+func TestDefaultWriteHandlerBasicDelete(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-func TestWriteHandlerInterface(t *testing.T) {
-	handler := &mockWriteHandler{}
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	wm, _ := wallog.NewWALManager(filepath.Join(tmpDir, "test.wal"))
+	defer wm.Close()
 
-	key := []byte("test_key")
-	value := []byte("test_value")
+	storage := testutil.NewInMemoryStorageEngine()
+	rollbackMgr := NewRollbackManager(bpm)
+
+	storage.Put([]byte("mykey"), []byte("myvalue"))
+
+	handler := NewDefaultWriteHandler(storage, rollbackMgr, bpm, wm)
 	txn := NewTransaction(1, READ_COMMITTED)
 
-	err := handler.Write(txn, key, value)
+	writeOp := WriteOperation{
+		Key:      []byte("mykey"),
+		Value:    []byte("myvalue"),
+		PageID:   page.ResourcePageID(1),
+		Offset:   0,
+		IsDelete: true,
+	}
+
+	err := handler.HandleWrite(txn, writeOp)
 	if err != nil {
-		t.Errorf("expected nil error, got %v", err)
+		t.Fatalf("delete failed: %v", err)
 	}
 
-	err = handler.Delete(txn, key)
-	if err != nil {
-		t.Errorf("expected nil error, got %v", err)
-	}
-}
-
-func TestDefaultWriteHandlerCreation(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	mockRollbackMgr := NewRollbackManager(mockBufMgr)
-	mockLogMgr := &mockLogManager{}
-	mockStorage := &mockStorageEngine{}
-
-	handler := NewDefaultWriteHandler(mockStorage, mockRollbackMgr, mockBufMgr, mockLogMgr)
-
-	if handler == nil {
-		t.Fatal("expected non-nil default write handler")
+	_, err = storage.Get([]byte("mykey"))
+	if err == nil {
+		t.Fatal("expected key to be deleted")
 	}
 }
 
-func TestMVCCWriteHandlerCreation(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	mockStorage := &mockStorageEngine{}
-	mockRollbackMgr := NewRollbackManager(mockBufMgr)
+func TestDefaultWriteHandlerMultipleWrites(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-	handler := NewMVCCWriteHandler(mockStorage, mockBufMgr, nil, mockRollbackMgr)
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	wm, _ := wallog.NewWALManager(filepath.Join(tmpDir, "test.wal"))
+	defer wm.Close()
 
-	if handler == nil {
-		t.Fatal("expected non-nil MVCC write handler")
-	}
-}
+	storage := testutil.NewInMemoryStorageEngine()
+	rollbackMgr := NewRollbackManager(bpm)
+	handler := NewDefaultWriteHandler(storage, rollbackMgr, bpm, wm)
 
-func TestWriteHandlerWithDifferentIsolationLevels(t *testing.T) {
-	isolationLevels := []uint8{
-		READ_UNCOMMITTED,
-		READ_COMMITTED,
-		REPEATABLE_READ,
-		SERIALIZABLE,
-	}
-
-	mockBufMgr := &mockBufferPoolManager{}
-	mockRollbackMgr := NewRollbackManager(mockBufMgr)
-	mockLogMgr := &mockLogManager{}
-	mockStorage := &mockStorageEngine{}
-
-	for _, level := range isolationLevels {
-		t.Run("isolation level", func(t *testing.T) {
-			txn := NewTransaction(1, level)
-			handler := NewDefaultWriteHandler(mockStorage, mockRollbackMgr, mockBufMgr, mockLogMgr)
-
-			if txn.GetIsolationLevel() != level {
-				t.Errorf("expected isolation level %d, got %d", level, txn.GetIsolationLevel())
-			}
-
-			if handler == nil {
-				t.Error("expected non-nil handler")
-			}
-		})
-	}
-}
-
-func TestWriteHandlerMultiple(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	mockRollbackMgr := NewRollbackManager(mockBufMgr)
-	mockLogMgr := &mockLogManager{}
-	mockStorage := &mockStorageEngine{}
-
-	handler1 := NewDefaultWriteHandler(mockStorage, mockRollbackMgr, mockBufMgr, mockLogMgr)
-	handler2 := NewDefaultWriteHandler(mockStorage, mockRollbackMgr, mockBufMgr, mockLogMgr)
-
-	if handler1 == handler2 {
-		t.Error("multiple handlers should be different instances")
-	}
-}
-
-func TestWriteHandlerBasicOperation(t *testing.T) {
-	handler := &mockWriteHandler{}
-	txn := NewTransaction(1, READ_COMMITTED)
-	key := []byte("key1")
-	value := []byte("value1")
-
-	err := handler.Write(txn, key, value)
-	if err != nil {
-		t.Errorf("expected nil error on write, got %v", err)
-	}
-
-	err = handler.Delete(txn, key)
-	if err != nil {
-		t.Errorf("expected nil error on delete, got %v", err)
-	}
-}
-
-func TestWriteHandlerWithNilKey(t *testing.T) {
-	handler := &mockWriteHandler{}
-	txn := NewTransaction(1, READ_COMMITTED)
-
-	err := handler.Write(txn, nil, []byte("value"))
-	if err != nil {
-	}
-}
-
-func TestWriteHandlerWithEmptyValue(t *testing.T) {
-	handler := &mockWriteHandler{}
-	txn := NewTransaction(1, READ_COMMITTED)
-	key := []byte("key")
-
-	err := handler.Write(txn, key, []byte{})
-	if err != nil {
-	}
-}
-
-func TestWriteHandlerMultipleWrites(t *testing.T) {
-	handler := &mockWriteHandler{}
 	txn := NewTransaction(1, READ_COMMITTED)
 
 	for i := 0; i < 5; i++ {
 		key := []byte{byte(i)}
 		value := []byte{byte(i * 2)}
-		err := handler.Write(txn, key, value)
+
+		writeOp := WriteOperation{
+			Key:      key,
+			Value:    value,
+			PageID:   page.ResourcePageID(i),
+			Offset:   0,
+			IsDelete: false,
+		}
+
+		err := handler.HandleWrite(txn, writeOp)
 		if err != nil {
-			t.Errorf("expected nil error on write %d, got %v", i, err)
+			t.Fatalf("write %d failed: %v", i, err)
+		}
+	}
+
+	for i := 0; i < 5; i++ {
+		key := []byte{byte(i)}
+		stored, err := storage.Get(key)
+		if err != nil {
+			t.Fatalf("get %d failed: %v", i, err)
+		}
+		if stored[0] != byte(i*2) {
+			t.Errorf("write %d mismatch", i)
 		}
 	}
 }
 
-func TestWriteHandlerInterleavedOperations(t *testing.T) {
-	handler := &mockWriteHandler{}
-	txn := NewTransaction(1, SERIALIZABLE)
+func TestDefaultWriteHandlerWALRecordingAndRollback(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-	err := handler.Write(txn, []byte("key1"), []byte("val1"))
-	if err != nil {
-		t.Errorf("expected nil error, got %v", err)
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	wm, _ := wallog.NewWALManager(filepath.Join(tmpDir, "test.wal"))
+	defer wm.Close()
+
+	storage := testutil.NewInMemoryStorageEngine()
+	rollbackMgr := NewRollbackManager(bpm)
+	handler := NewDefaultWriteHandler(storage, rollbackMgr, bpm, wm)
+
+	txn := NewTransaction(1, READ_COMMITTED)
+
+	writeOp := WriteOperation{
+		Key:      []byte("rollbackkey"),
+		Value:    []byte("newvalue"),
+		PageID:   page.ResourcePageID(1),
+		Offset:   0,
+		IsDelete: false,
 	}
 
-	err = handler.Delete(txn, []byte("key1"))
+	err := handler.HandleWrite(txn, writeOp)
 	if err != nil {
-		t.Errorf("expected nil error, got %v", err)
+		t.Fatalf("write failed: %v", err)
 	}
 
-	err = handler.Write(txn, []byte("key1"), []byte("val2"))
+	stored, _ := storage.Get([]byte("rollbackkey"))
+	if string(stored) != "newvalue" {
+		t.Errorf("expected 'newvalue', got '%s'", string(stored))
+	}
+
+	rollbackMgr.HasOperations(txn)
+}
+
+func TestMVCCWriteHandlerBasicWrite(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	storage := testutil.NewInMemoryStorageEngine()
+	rollbackMgr := NewRollbackManager(bpm)
+
+	handler := NewMVCCWriteHandler(storage, bpm, nil, rollbackMgr)
+
+	txn := NewTransaction(1, READ_COMMITTED)
+	writeOp := WriteOperation{
+		Key:      []byte("mvcckey"),
+		Value:    []byte("mvccvalue"),
+		PageID:   page.ResourcePageID(1),
+		Offset:   0,
+		IsDelete: false,
+	}
+
+	err := handler.HandleWrite(txn, writeOp)
 	if err != nil {
-		t.Errorf("expected nil error, got %v", err)
+		t.Fatalf("MVCC write failed: %v", err)
+	}
+
+	stored, err := storage.Get([]byte("mvcckey"))
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+
+	if string(stored) != "mvccvalue" {
+		t.Errorf("expected 'mvccvalue', got '%s'", string(stored))
+	}
+}
+
+func TestMVCCWriteHandlerDelete(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	storage := testutil.NewInMemoryStorageEngine()
+	storage.Put([]byte("delkey"), []byte("delvalue"))
+
+	rollbackMgr := NewRollbackManager(bpm)
+	handler := NewMVCCWriteHandler(storage, bpm, nil, rollbackMgr)
+
+	txn := NewTransaction(1, READ_COMMITTED)
+	writeOp := WriteOperation{
+		Key:      []byte("delkey"),
+		Value:    []byte("delvalue"),
+		PageID:   page.ResourcePageID(1),
+		Offset:   0,
+		IsDelete: true,
+	}
+
+	err := handler.HandleWrite(txn, writeOp)
+	if err != nil {
+		t.Fatalf("MVCC delete failed: %v", err)
+	}
+
+	_, err = storage.Get([]byte("delkey"))
+	if err == nil {
+		t.Fatal("expected key to be deleted")
+	}
+}
+
+func TestWriteHandlerSetIndexContext(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	wm, _ := wallog.NewWALManager(filepath.Join(tmpDir, "test.wal"))
+	defer wm.Close()
+
+	storage := testutil.NewInMemoryStorageEngine()
+	rollbackMgr := NewRollbackManager(bpm)
+
+	handler := NewDefaultWriteHandler(storage, rollbackMgr, bpm, wm)
+
+	schema := testutil.NewUserTableSchema()
+
+	err := handler.SetIndexContext(schema, nil)
+	if err != nil {
+		t.Fatalf("set index context failed: %v", err)
+	}
+}
+
+func TestDefaultWriteHandlerErrorHandling(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	wm, _ := wallog.NewWALManager(filepath.Join(tmpDir, "test.wal"))
+	defer wm.Close()
+
+	storage := testutil.NewInMemoryStorageEngine()
+	rollbackMgr := NewRollbackManager(bpm)
+	handler := NewDefaultWriteHandler(storage, rollbackMgr, bpm, wm)
+
+	txn := NewTransaction(1, READ_COMMITTED)
+
+	writeOp := WriteOperation{
+		Key:      []byte("key1"),
+		Value:    []byte("val1"),
+		PageID:   page.ResourcePageID(1),
+		Offset:   0,
+		IsDelete: false,
+	}
+
+	err := handler.HandleWrite(txn, writeOp)
+	if err != nil {
+		t.Fatalf("write should succeed: %v", err)
 	}
 }

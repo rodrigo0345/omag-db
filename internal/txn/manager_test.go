@@ -1,106 +1,39 @@
 package txn
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/rodrigo0345/omag/internal/storage"
-	"github.com/rodrigo0345/omag/internal/storage/schema"
-	"github.com/rodrigo0345/omag/internal/txn/log"
+	wallog "github.com/rodrigo0345/omag/internal/txn/log"
+	"github.com/rodrigo0345/omag/internal/txn/testutil"
 )
 
-type mockIsolationManager struct{}
+func TestNewTransactionManagerWithWAL(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-func (m *mockIsolationManager) BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64 {
-	return 1
-}
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	wm, _ := wallog.NewWALManager(filepath.Join(tmpDir, "test.wal"))
+	defer wm.Close()
 
-func (m *mockIsolationManager) Read(txnID int64, key []byte) ([]byte, error) {
-	return nil, nil
-}
+	storage := testutil.NewInMemoryStorageEngine()
 
-func (m *mockIsolationManager) Write(txnID int64, key []byte, value []byte) error {
-	return nil
-}
-
-func (m *mockIsolationManager) Commit(txnID int64) error {
-	return nil
-}
-
-func (m *mockIsolationManager) Abort(txnID int64) error {
-	return nil
-}
-
-func (m *mockIsolationManager) Close() error {
-	return nil
-}
-
-type mockLogManager struct{}
-
-func (m *mockLogManager) AppendLogRecord(record log.ILogRecord) (log.LSN, error) {
-	return 0, nil
-}
-
-func (m *mockLogManager) Flush(upToLSN log.LSN) error {
-	return nil
-}
-
-func (m *mockLogManager) Recover() (*log.RecoveryState, error) {
-	return nil, nil
-}
-
-func (m *mockLogManager) Checkpoint() error {
-	return nil
-}
-
-func (m *mockLogManager) GetLastCheckpointLSN() uint64 {
-	return 0
-}
-
-func (m *mockLogManager) Close() error {
-	return nil
-}
-
-func (m *mockLogManager) ReadAllRecords() ([]log.WALRecord, error) {
-	return nil, nil
-}
-
-type mockStorageEngine struct{}
-
-func (m *mockStorageEngine) Get(key []byte) ([]byte, error) {
-	return nil, nil
-}
-
-func (m *mockStorageEngine) Put(key []byte, value []byte) error {
-	return nil
-}
-
-func (m *mockStorageEngine) Delete(key []byte) error {
-	return nil
-}
-
-func (m *mockStorageEngine) Scan() ([]storage.ScanEntry, error) {
-	return []storage.ScanEntry{}, nil
-}
-
-func TestNewTransactionManager(t *testing.T) {
-	mockIsolMgr := &mockIsolationManager{}
-	mockLogMgr := &mockLogManager{}
-	mockBufMgr := &mockBufferPoolManager{}
-	mockStorage := &mockStorageEngine{}
-
-	tm := NewTransactionManager(mockIsolMgr, mockLogMgr, mockBufMgr, mockStorage)
+	tm := NewTransactionManager(nil, wm, bpm, storage)
 
 	if tm == nil {
 		t.Fatal("expected non-nil transaction manager")
 	}
 }
 
-func TestNewTransactionManagerWithoutLog(t *testing.T) {
-	mockIsolMgr := &mockIsolationManager{}
-	mockBufMgr := &mockBufferPoolManager{}
-	mockStorage := &mockStorageEngine{}
+func TestNewTransactionManagerWithoutWAL(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-	tm := NewTransactionManager(mockIsolMgr, nil, mockBufMgr, mockStorage)
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	storage := testutil.NewInMemoryStorageEngine()
+
+	tm := NewTransactionManager(nil, nil, bpm, storage)
 
 	if tm == nil {
 		t.Fatal("expected non-nil transaction manager")
@@ -108,12 +41,16 @@ func TestNewTransactionManagerWithoutLog(t *testing.T) {
 }
 
 func TestGetRollbackManager(t *testing.T) {
-	mockIsolMgr := &mockIsolationManager{}
-	mockLogMgr := &mockLogManager{}
-	mockBufMgr := &mockBufferPoolManager{}
-	mockStorage := &mockStorageEngine{}
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-	tm := NewTransactionManager(mockIsolMgr, mockLogMgr, mockBufMgr, mockStorage)
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	wm, _ := wallog.NewWALManager(filepath.Join(tmpDir, "test.wal"))
+	defer wm.Close()
+
+	storage := testutil.NewInMemoryStorageEngine()
+
+	tm := NewTransactionManager(nil, wm, bpm, storage)
 	rm := tm.GetRollbackManager()
 
 	if rm == nil {
@@ -121,27 +58,60 @@ func TestGetRollbackManager(t *testing.T) {
 	}
 }
 
-func TestGetWriteHandler(t *testing.T) {
-	mockIsolMgr := &mockIsolationManager{}
-	mockLogMgr := &mockLogManager{}
-	mockBufMgr := &mockBufferPoolManager{}
-	mockStorage := &mockStorageEngine{}
+func TestGetWriteHandlerWithWAL(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-	tm := NewTransactionManager(mockIsolMgr, mockLogMgr, mockBufMgr, mockStorage)
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	wm, _ := wallog.NewWALManager(filepath.Join(tmpDir, "test.wal"))
+	defer wm.Close()
+
+	storage := testutil.NewInMemoryStorageEngine()
+
+	tm := NewTransactionManager(nil, wm, bpm, storage)
 	wh := tm.GetWriteHandler()
 
 	if wh == nil {
 		t.Fatal("expected non-nil write handler")
 	}
+
+	_, ok := wh.(*DefaultWriteHandler)
+	if !ok {
+		t.Error("expected DefaultWriteHandler when WAL is provided")
+	}
+}
+
+func TestGetWriteHandlerWithoutWAL(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	storage := testutil.NewInMemoryStorageEngine()
+
+	tm := NewTransactionManager(nil, nil, bpm, storage)
+	wh := tm.GetWriteHandler()
+
+	if wh == nil {
+		t.Fatal("expected non-nil write handler")
+	}
+
+	_, ok := wh.(*MVCCWriteHandler)
+	if !ok {
+		t.Error("expected MVCCWriteHandler when WAL is not provided")
+	}
 }
 
 func TestTransactionManagerIntegration(t *testing.T) {
-	mockIsolMgr := &mockIsolationManager{}
-	mockLogMgr := &mockLogManager{}
-	mockBufMgr := &mockBufferPoolManager{}
-	mockStorage := &mockStorageEngine{}
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-	tm := NewTransactionManager(mockIsolMgr, mockLogMgr, mockBufMgr, mockStorage)
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	wm, _ := wallog.NewWALManager(filepath.Join(tmpDir, "test.wal"))
+	defer wm.Close()
+
+	storage := testutil.NewInMemoryStorageEngine()
+
+	tm := NewTransactionManager(nil, wm, bpm, storage)
 
 	if tm.GetRollbackManager() == nil {
 		t.Error("rollback manager should not be nil")
@@ -153,28 +123,19 @@ func TestTransactionManagerIntegration(t *testing.T) {
 }
 
 func TestTransactionManagerMultiple(t *testing.T) {
-	mockIsolMgr := &mockIsolationManager{}
-	mockLogMgr := &mockLogManager{}
-	mockBufMgr := &mockBufferPoolManager{}
-	mockStorage := &mockStorageEngine{}
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-	tm1 := NewTransactionManager(mockIsolMgr, mockLogMgr, mockBufMgr, mockStorage)
-	tm2 := NewTransactionManager(mockIsolMgr, mockLogMgr, mockBufMgr, mockStorage)
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	wm, _ := wallog.NewWALManager(filepath.Join(tmpDir, "test.wal"))
+	defer wm.Close()
+
+	storage := testutil.NewInMemoryStorageEngine()
+
+	tm1 := NewTransactionManager(nil, wm, bpm, storage)
+	tm2 := NewTransactionManager(nil, wm, bpm, storage)
 
 	if tm1 == tm2 {
 		t.Error("multiple transaction managers should be different instances")
-	}
-}
-
-func TestTransactionManagerWithDifferentIsolationLevels(t *testing.T) {
-	mockIsolMgr := &mockIsolationManager{}
-	mockLogMgr := &mockLogManager{}
-	mockBufMgr := &mockBufferPoolManager{}
-	mockStorage := &mockStorageEngine{}
-
-	tm := NewTransactionManager(mockIsolMgr, mockLogMgr, mockBufMgr, mockStorage)
-
-	if tm == nil {
-		t.Error("expected manager to be created successfully")
 	}
 }

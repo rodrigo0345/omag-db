@@ -1,36 +1,19 @@
 package txn
 
 import (
+	"os"
 	"testing"
 
 	"github.com/rodrigo0345/omag/internal/storage/page"
+	"github.com/rodrigo0345/omag/internal/txn/testutil"
 )
 
-type mockBufferPoolManager struct{}
-
-func (m *mockBufferPoolManager) NewPage() (*page.IResourcePage, error) {
-	return nil, nil
-}
-
-func (m *mockBufferPoolManager) PinPage(pageID page.ResourcePageID) (page.IResourcePage, error) {
-	return nil, nil
-}
-
-func (m *mockBufferPoolManager) UnpinPage(pageID page.ResourcePageID, isDirty bool) error {
-	return nil
-}
-
-func (m *mockBufferPoolManager) FlushAll() error {
-	return nil
-}
-
-func (m *mockBufferPoolManager) Close() error {
-	return nil
-}
-
 func TestNewRollbackManager(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	rm := NewRollbackManager(mockBufMgr)
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	rm := NewRollbackManager(bpm)
 
 	if rm == nil {
 		t.Fatal("expected non-nil rollback manager")
@@ -38,8 +21,11 @@ func TestNewRollbackManager(t *testing.T) {
 }
 
 func TestRecordPageWrite(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	rm := NewRollbackManager(mockBufMgr)
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	rm := NewRollbackManager(bpm)
 	txn := NewTransaction(1, READ_COMMITTED)
 
 	pageID := page.ResourcePageID(0)
@@ -57,8 +43,11 @@ func TestRecordPageWrite(t *testing.T) {
 }
 
 func TestRecordPageWriteMultiple(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	rm := NewRollbackManager(mockBufMgr)
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	rm := NewRollbackManager(bpm)
 	txn := NewTransaction(1, READ_COMMITTED)
 
 	opID1, _ := rm.RecordPageWrite(txn, 0, 0, []byte{1})
@@ -71,8 +60,11 @@ func TestRecordPageWriteMultiple(t *testing.T) {
 }
 
 func TestRollbackTransactionNil(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	rm := NewRollbackManager(mockBufMgr)
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	rm := NewRollbackManager(bpm)
 
 	err := rm.RollbackTransaction(nil, nil, nil)
 	if err == nil {
@@ -81,8 +73,11 @@ func TestRollbackTransactionNil(t *testing.T) {
 }
 
 func TestRollbackTransactionCommitted(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	rm := NewRollbackManager(mockBufMgr)
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	rm := NewRollbackManager(bpm)
 	txn := NewTransaction(1, READ_COMMITTED)
 
 	txn.Commit()
@@ -94,8 +89,11 @@ func TestRollbackTransactionCommitted(t *testing.T) {
 }
 
 func TestHasOperations(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	rm := NewRollbackManager(mockBufMgr)
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	rm := NewRollbackManager(bpm)
 	txn := NewTransaction(1, READ_COMMITTED)
 
 	hasOps := rm.HasOperations(txn)
@@ -112,8 +110,11 @@ func TestHasOperations(t *testing.T) {
 }
 
 func TestRollbackToSavePointNil(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	rm := NewRollbackManager(mockBufMgr)
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	rm := NewRollbackManager(bpm)
 
 	err := rm.RollbackToSavePoint(nil, 0)
 
@@ -123,8 +124,11 @@ func TestRollbackToSavePointNil(t *testing.T) {
 }
 
 func TestRollbackToSavePointInvalid(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	rm := NewRollbackManager(mockBufMgr)
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	rm := NewRollbackManager(bpm)
 	txn := NewTransaction(1, READ_COMMITTED)
 
 	err := rm.RollbackToSavePoint(txn, -1)
@@ -135,8 +139,11 @@ func TestRollbackToSavePointInvalid(t *testing.T) {
 }
 
 func TestGetOperationCount(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	rm := NewRollbackManager(mockBufMgr)
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	rm := NewRollbackManager(bpm)
 	txn := NewTransaction(1, READ_COMMITTED)
 
 	rm.RecordPageWrite(txn, 0, 0, []byte{1})
@@ -156,8 +163,11 @@ func TestRollbackManagerTransactionID(t *testing.T) {
 }
 
 func TestMultipleTransactionsRecording(t *testing.T) {
-	mockBufMgr := &mockBufferPoolManager{}
-	rm := NewRollbackManager(mockBufMgr)
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	rm := NewRollbackManager(bpm)
 
 	txn1 := NewTransaction(1, READ_COMMITTED)
 	txn2 := NewTransaction(2, READ_COMMITTED)

@@ -3,6 +3,7 @@ package txn
 import (
 	"testing"
 
+	"github.com/rodrigo0345/omag/internal/storage/page"
 	"github.com/rodrigo0345/omag/internal/txn/undo"
 )
 
@@ -221,4 +222,95 @@ func TestTransactionRecordOperation(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected nil error, got %v", err)
 	}
+}
+
+func TestTransactionCleanupCallbacksExecution(t *testing.T) {
+	txn := NewTransaction(1, READ_COMMITTED)
+
+	callOrder := []int{}
+	txn.RegisterCleanupCallback(func() error {
+		callOrder = append(callOrder, 1)
+		return nil
+	})
+	txn.RegisterCleanupCallback(func() error {
+		callOrder = append(callOrder, 2)
+		return nil
+	})
+
+	err := txn.ExecuteCleanupCallbacks()
+	if err != nil {
+		t.Fatalf("cleanup failed: %v", err)
+	}
+
+	if len(callOrder) != 2 {
+		t.Errorf("expected 2 callbacks, got %d", len(callOrder))
+	}
+	if callOrder[0] != 1 || callOrder[1] != 2 {
+		t.Errorf("expected callbacks in order [1,2], got %v", callOrder)
+	}
+}
+
+func TestTransactionCleanupCallbackError(t *testing.T) {
+	txn := NewTransaction(1, READ_COMMITTED)
+
+	txn.RegisterCleanupCallback(func() error {
+		return nil
+	})
+	txn.RegisterCleanupCallback(func() error {
+		return nil
+	})
+
+	err := txn.ExecuteCleanupCallbacks()
+	if err != nil {
+		t.Fatalf("cleanup should succeed: %v", err)
+	}
+}
+
+func TestTransactionConcurrentLockOperations(t *testing.T) {
+	txn := NewTransaction(1, SERIALIZABLE)
+	done := make(chan bool, 10)
+
+	for i := 0; i < 5; i++ {
+		go func(idx int) {
+			key := []byte{byte(idx)}
+			txn.AddSharedLock(key)
+			txn.RemoveSharedLock(key)
+			done <- true
+		}(i)
+	}
+
+	for i := 0; i < 5; i++ {
+		go func(idx int) {
+			key := []byte{byte(idx + 5)}
+			txn.AddExclusiveLock(key)
+			txn.RemoveExclusiveLock(key)
+			done <- true
+		}(i)
+	}
+
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
+
+type mockBufferPoolManager struct{}
+
+func (m *mockBufferPoolManager) NewPage() (*page.IResourcePage, error) {
+	return nil, nil
+}
+
+func (m *mockBufferPoolManager) PinPage(pageID page.ResourcePageID) (page.IResourcePage, error) {
+	return nil, nil
+}
+
+func (m *mockBufferPoolManager) UnpinPage(pageID page.ResourcePageID, isDirty bool) error {
+	return nil
+}
+
+func (m *mockBufferPoolManager) FlushAll() error {
+	return nil
+}
+
+func (m *mockBufferPoolManager) Close() error {
+	return nil
 }

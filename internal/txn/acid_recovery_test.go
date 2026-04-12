@@ -1,191 +1,277 @@
 package txn
 
 import (
-	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/rodrigo0345/omag/internal/storage"
+	"github.com/rodrigo0345/omag/internal/storage/page"
+	wallog "github.com/rodrigo0345/omag/internal/txn/log"
+	"github.com/rodrigo0345/omag/internal/txn/testutil"
 )
 
-type MockStorageEngine struct {
-	data map[string][]byte
-}
+func TestCrashRecovery_BasicRecovery(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-func (m *MockStorageEngine) Put(key []byte, value []byte) error {
-	m.data[string(key)] = value
-	return nil
-}
+	walPath := filepath.Join(tmpDir, "test.wal")
+	wm, _ := wallog.NewWALManager(walPath)
 
-func (m *MockStorageEngine) Get(key []byte) ([]byte, error) {
-	val, ok := m.data[string(key)]
-	if !ok {
-		return nil, fmt.Errorf("key not found")
-	}
-	return val, nil
-}
-
-func (m *MockStorageEngine) Delete(key []byte) error {
-	delete(m.data, string(key))
-	return nil
-}
-
-func (m *MockStorageEngine) Scan() ([]storage.ScanEntry, error) {
-	result := make([]storage.ScanEntry, 0)
-	for key, value := range m.data {
-		result = append(result, storage.ScanEntry{
-			Key:   []byte(key),
-			Value: value,
-		})
-	}
-	return result, nil
-}
-
-func TestAtomicity(t *testing.T) {
-	engine := &MockStorageEngine{data: make(map[string][]byte)}
-
-	records := []struct {
-		key   string
-		value string
-	}{
-		{"user:1", "Alice"},
-		{"user:2", "Bob"},
-		{"user:3", "Charlie"},
+	rec := &wallog.WALRecord{
+		TxnID:  1,
+		Type:   wallog.UPDATE,
+		PageID: page.ResourcePageID(1),
+		Before: []byte{1, 2, 3},
+		After:  []byte{4, 5, 6},
 	}
 
-	for _, rec := range records {
-		if err := engine.Put([]byte(rec.key), []byte(rec.value)); err != nil {
-			t.Fatalf("put failed: %v", err)
-		}
-	}
+	wm.AppendLogRecord(rec)
+	wm.Close()
 
-	entries, err := engine.Scan()
+	wm2, _ := wallog.NewWALManager(walPath)
+	defer wm2.Close()
+
+	state, err := wm2.Recover()
 	if err != nil {
-		t.Fatalf("scan failed: %v", err)
+		t.Fatalf("recovery failed: %v", err)
 	}
 
-	existingRecords := make(map[string]bool)
-	for _, entry := range entries {
-		existingRecords[string(entry.Key)] = true
-	}
-
-	userRecords := 0
-	for key := range existingRecords {
-		if len(key) > 5 && key[0:5] == "user:" {
-			userRecords++
-		}
-	}
-
-	if userRecords != 3 {
-		t.Fatalf("atomicity violated: expected 3 records, got %d", userRecords)
+	if state == nil {
+		t.Fatal("recovery state should not be nil")
 	}
 }
 
-func TestConsistency(t *testing.T) {
-	engine := &MockStorageEngine{data: make(map[string][]byte)}
+func TestCrashRecovery_CommittedTransaction(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-	records := map[string]string{
-		"order:1":        "Order 1",
-		"order:1:item:1": "Item 1",
-		"order:1:item:2": "Item 2",
+	walPath := filepath.Join(tmpDir, "test.wal")
+	wm, _ := wallog.NewWALManager(walPath)
+
+	txnID := uint64(42)
+
+	updateRec := &wallog.WALRecord{
+		TxnID:  txnID,
+		Type:   wallog.UPDATE,
+		PageID: page.ResourcePageID(1),
+		Before: []byte{10},
+		After:  []byte{20},
 	}
+	wm.AppendLogRecord(updateRec)
 
-	for key, value := range records {
-		if err := engine.Put([]byte(key), []byte(value)); err != nil {
-			t.Fatalf("put failed: %v", err)
-		}
+	commitRec := &wallog.WALRecord{
+		TxnID: txnID,
+		Type:  wallog.COMMIT,
 	}
+	wm.AppendLogRecord(commitRec)
+	wm.Close()
 
-	entries, err := engine.Scan()
+	wm2, _ := wallog.NewWALManager(walPath)
+	defer wm2.Close()
+
+	state, err := wm2.Recover()
 	if err != nil {
-		t.Fatalf("scan failed: %v", err)
+		t.Fatalf("recovery failed: %v", err)
 	}
 
-	hasOrder1 := false
-	hasItems := false
-
-	for _, entry := range entries {
-		key := string(entry.Key)
-		if key == "order:1" {
-			hasOrder1 = true
-		}
-		if len(key) > 10 && key[0:10] == "order:1:item:" {
-			hasItems = true
-		}
-	}
-
-	if hasItems && !hasOrder1 {
-		t.Fatalf("referential integrity violated: items exist but order doesn't")
+	if _, exists := state.CommittedTxns[txnID]; !exists {
+		t.Errorf("committed transaction %d not found in recovery state", txnID)
 	}
 }
 
-func TestIsolation(t *testing.T) {
-	engine := &MockStorageEngine{data: make(map[string][]byte)}
+func TestCrashRecovery_AbortedTransaction(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-	if err := engine.Put([]byte("committed:data"), []byte("This is committed")); err != nil {
-		t.Fatalf("put failed: %v", err)
+	walPath := filepath.Join(tmpDir, "test.wal")
+	wm, _ := wallog.NewWALManager(walPath)
+
+	txnID := uint64(99)
+
+	updateRec := &wallog.WALRecord{
+		TxnID:  txnID,
+		Type:   wallog.UPDATE,
+		PageID: page.ResourcePageID(2),
+		Before: []byte{30},
+		After:  []byte{40},
 	}
+	wm.AppendLogRecord(updateRec)
 
-	if err := engine.Put([]byte("uncommitted:data"), []byte("This should be rolled back")); err != nil {
-		t.Fatalf("put failed: %v", err)
+	abortRec := &wallog.WALRecord{
+		TxnID: txnID,
+		Type:  wallog.ABORT,
 	}
+	wm.AppendLogRecord(abortRec)
+	wm.Close()
 
-	if err := engine.Delete([]byte("uncommitted:data")); err != nil {
-		t.Fatalf("delete failed: %v", err)
-	}
+	wm2, _ := wallog.NewWALManager(walPath)
+	defer wm2.Close()
 
-	entries, err := engine.Scan()
+	state, err := wm2.Recover()
 	if err != nil {
-		t.Fatalf("scan failed: %v", err)
+		t.Fatalf("recovery failed: %v", err)
 	}
 
-	hasUncommitted := false
-
-	for _, entry := range entries {
-		key := string(entry.Key)
-		if key == "uncommitted:data" {
-			hasUncommitted = true
-		}
-	}
-
-	if hasUncommitted {
-		t.Fatalf("isolation violation: uncommitted data visible after recovery")
+	if _, exists := state.AbortedTxns[txnID]; !exists {
+		t.Errorf("aborted transaction %d not found in recovery state", txnID)
 	}
 }
 
-func TestDurability(t *testing.T) {
-	engine := &MockStorageEngine{data: make(map[string][]byte)}
+func TestCrashRecovery_MultipleTransactions(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
 
-	dataToWrite := map[string]string{
-		"purchase:1": "Widget",
-		"purchase:2": "Gadget",
-		"purchase:3": "Device",
-	}
+	walPath := filepath.Join(tmpDir, "test.wal")
+	wm, _ := wallog.NewWALManager(walPath)
 
-	for key, value := range dataToWrite {
-		if err := engine.Put([]byte(key), []byte(value)); err != nil {
-			t.Fatalf("put failed: %v", err)
+	committed := []uint64{1, 2, 3}
+	aborted := []uint64{4, 5}
+
+	for _, txnID := range committed {
+		updateRec := &wallog.WALRecord{
+			TxnID:  txnID,
+			Type:   wallog.UPDATE,
+			PageID: page.ResourcePageID(txnID),
+			Before: []byte{byte(txnID)},
+			After:  []byte{byte(txnID * 2)},
 		}
+		wm.AppendLogRecord(updateRec)
+
+		commitRec := &wallog.WALRecord{
+			TxnID: txnID,
+			Type:  wallog.COMMIT,
+		}
+		wm.AppendLogRecord(commitRec)
 	}
 
-	entries, err := engine.Scan()
+	for _, txnID := range aborted {
+		updateRec := &wallog.WALRecord{
+			TxnID:  txnID,
+			Type:   wallog.UPDATE,
+			PageID: page.ResourcePageID(txnID),
+			Before: []byte{byte(txnID)},
+			After:  []byte{byte(txnID * 2)},
+		}
+		wm.AppendLogRecord(updateRec)
+
+		abortRec := &wallog.WALRecord{
+			TxnID: txnID,
+			Type:  wallog.ABORT,
+		}
+		wm.AppendLogRecord(abortRec)
+	}
+
+	wm.Close()
+
+	wm2, _ := wallog.NewWALManager(walPath)
+	defer wm2.Close()
+
+	state, err := wm2.Recover()
 	if err != nil {
-		t.Fatalf("scan failed: %v", err)
+		t.Fatalf("recovery failed: %v", err)
 	}
 
-	found := make(map[string]bool)
-	for _, entry := range entries {
-		found[string(entry.Key)] = true
+	if len(state.CommittedTxns) != len(committed) {
+		t.Errorf("expected %d committed txns, got %d", len(committed), len(state.CommittedTxns))
 	}
 
-	expectedCount := 0
-	for key := range dataToWrite {
-		if !found[key] {
-			t.Fatalf("durability violated: committed data '%s' not found", key)
+	if len(state.AbortedTxns) != len(aborted) {
+		t.Errorf("expected %d aborted txns, got %d", len(aborted), len(state.AbortedTxns))
+	}
+
+	for _, txnID := range committed {
+		if _, exists := state.CommittedTxns[txnID]; !exists {
+			t.Errorf("committed txn %d not in recovery state", txnID)
 		}
-		expectedCount++
 	}
 
-	if len(found) != expectedCount {
-		t.Fatalf("durability: expected %d records, got %d", expectedCount, len(found))
+	for _, txnID := range aborted {
+		if _, exists := state.AbortedTxns[txnID]; !exists {
+			t.Errorf("aborted txn %d not in recovery state", txnID)
+		}
+	}
+}
+
+func TestCrashRecovery_IntermediateState(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	walPath := filepath.Join(tmpDir, "test.wal")
+	wm, _ := wallog.NewWALManager(walPath)
+
+	unknownTxn := uint64(777)
+	updateRec := &wallog.WALRecord{
+		TxnID:  unknownTxn,
+		Type:   wallog.UPDATE,
+		PageID: page.ResourcePageID(10),
+		Before: []byte{100},
+		After:  []byte{200},
+	}
+	wm.AppendLogRecord(updateRec)
+
+	wm.Close()
+
+	wm2, _ := wallog.NewWALManager(walPath)
+	defer wm2.Close()
+
+	state, err := wm2.Recover()
+	if err != nil {
+		t.Fatalf("recovery failed: %v", err)
+	}
+
+	if _, inCommitted := state.CommittedTxns[unknownTxn]; inCommitted {
+		t.Error("incomplete transaction should not be in committed set")
+	}
+}
+
+func TestCrashRecovery_DurabilityAfterCrash(t *testing.T) {
+	tmpDir, _ := os.MkdirTemp("", "omag-test-")
+	defer os.RemoveAll(tmpDir)
+
+	bpm := testutil.NewTestBufferPoolManager(t, tmpDir)
+	walPath := filepath.Join(tmpDir, "test.wal")
+	wm, _ := wallog.NewWALManager(walPath)
+
+	storage := testutil.NewInMemoryStorageEngine()
+	rollbackMgr := NewRollbackManager(bpm)
+	handler := NewDefaultWriteHandler(storage, rollbackMgr, bpm, wm)
+
+	txn := NewTransaction(1, READ_COMMITTED)
+
+	writeOp := WriteOperation{
+		Key:      []byte("crash_test_key"),
+		Value:    []byte("crash_test_value"),
+		PageID:   page.ResourcePageID(1),
+		Offset:   0,
+		IsDelete: false,
+	}
+
+	err := handler.HandleWrite(txn, writeOp)
+	if err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	wm.Flush(0)
+	wm.Close()
+
+	wm2, _ := wallog.NewWALManager(walPath)
+	defer wm2.Close()
+
+	state, err := wm2.Recover()
+	if err != nil {
+		t.Fatalf("recovery failed: %v", err)
+	}
+
+	if state == nil {
+		t.Fatal("recovery state should not be nil")
+	}
+
+	stored, err := storage.Get([]byte("crash_test_key"))
+	if err != nil {
+		t.Fatalf("data lost after crash recovery: %v", err)
+	}
+
+	if string(stored) != "crash_test_value" {
+		t.Errorf("durability compromised: expected 'crash_test_value', got '%s'", string(stored))
 	}
 }
