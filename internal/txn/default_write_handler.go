@@ -85,9 +85,19 @@ func (dh *DefaultWriteHandler) HandleWrite(txn *Transaction, writeOp WriteOperat
 		if err := dh.storageEngine.Delete(writeOp.Key); err != nil {
 			return fmt.Errorf("storage delete failed: %w", err)
 		}
+		// Record deletion operation for crash recovery
+		txn.RecordRecoveryOperation(log.DELETE, writeOp.Key, nil)
+		if dh.logManager != nil {
+			dh.logManager.AddTransactionOperation(txn.GetID(), log.DELETE, writeOp.Key, nil)
+		}
 	} else {
 		if err := dh.storageEngine.Put(writeOp.Key, writeOp.Value); err != nil {
 			return fmt.Errorf("storage put failed: %w", err)
+		}
+		// Record put operation for crash recovery
+		txn.RecordRecoveryOperation(log.PUT, writeOp.Key, writeOp.Value)
+		if dh.logManager != nil {
+			dh.logManager.AddTransactionOperation(txn.GetID(), log.PUT, writeOp.Key, writeOp.Value)
 		}
 
 		if dh.indexManager != nil && dh.tableSchema != nil {

@@ -14,4 +14,8 @@ type ILogManager interface {
 	Close() error
 
 	ReadAllRecords() ([]WALRecord, error)
+
+	// Operation tracking for crash recovery
+	AddTransactionOperation(txnID uint64, opType RecordType, key []byte, value []byte)
+	CleanupTransactionOperations(txnID uint64)
 }

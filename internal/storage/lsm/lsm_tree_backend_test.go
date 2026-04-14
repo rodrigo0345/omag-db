@@ -50,6 +50,10 @@ func (m *mockLogManager) GetLastCheckpointLSN() uint64 {
 	return 0
 }
 
+func (m *mockLogManager) AddTransactionOperation(txnID uint64, opType log.RecordType, key []byte, value []byte) {
+
+}
+
 func (m *mockLogManager) Close() error {
 	return nil
 }

@@ -165,6 +165,11 @@ func (m *OptimisticConcurrencyControlManager) Abort(txnID int64) error {
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
 
+	// Clean up transaction operations since this transaction is being aborted
+	if m.logManager != nil {
+		m.logManager.CleanupTransactionOperations(transaction.GetID())
+	}
+
 	return m.rollbackManager.RollbackTransaction(transaction, nil, nil)
 }
 

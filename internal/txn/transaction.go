@@ -3,6 +3,7 @@ package txn
 import (
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/storage/schema"
+	"github.com/rodrigo0345/omag/internal/txn/log"
 	"github.com/rodrigo0345/omag/internal/txn/undo"
 )
 
@@ -31,6 +32,7 @@ type Transaction struct {
 	tableName        string
 	tableSchema      *schema.TableSchema
 	cleanupCallbacks []func() error
+	operations       []log.RecoveryOperation // Operations for crash recovery
 }
 
 func NewTransaction(txnID uint64, isolationLevel uint8) *Transaction {
@@ -44,6 +46,7 @@ func NewTransaction(txnID uint64, isolationLevel uint8) *Transaction {
 		tableName:        "",
 		tableSchema:      nil,
 		cleanupCallbacks: make([]func() error, 0),
+		operations:       make([]log.RecoveryOperation, 0),
 	}
 }
 
@@ -159,4 +162,18 @@ func (t *Transaction) ExecuteCleanupCallbacks() error {
 		}
 	}
 	return nil
+}
+
+func (t *Transaction) RecordRecoveryOperation(opType log.RecordType, key []byte, value []byte) {
+	op := log.RecoveryOperation{
+		TxnID: t.txnID,
+		Type:  opType,
+		Key:   key,
+		Value: value,
+	}
+	t.operations = append(t.operations, op)
+}
+
+func (t *Transaction) GetRecoveryOperations() []log.RecoveryOperation {
+	return t.operations
 }

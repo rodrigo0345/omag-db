@@ -17,6 +17,9 @@ const (
 	COMMIT
 	ABORT
 	CHECKPOINT
+	PUT        RecordType = 10
+	DELETE     RecordType = 11
+	OPERATION  RecordType = 12 // Operation record for recovery
 )
 
 type DirtyPageTable map[page.ResourcePageID]uint64
@@ -31,6 +34,14 @@ type CheckpointMetadata struct {
 	ActiveTransactionTable
 }
 
+// RecoveryOperation represents a high-level database operation for recovery
+type RecoveryOperation struct {
+	TxnID uint64
+	Type  RecordType
+	Key   []byte
+	Value []byte
+}
+
 type RecoveryState struct {
 	CommittedTxns map[uint64]bool
 	AbortedTxns   map[uint64]bool
@@ -42,6 +53,7 @@ type RecoveryState struct {
 	DirtyPages         DirtyPageTable
 	UndoList           []*WALRecord
 	TobeRedone         map[uint64][]uint64
+	Operations         []RecoveryOperation // High-level operations for transaction replay
 }
 
 type WALManager struct {
@@ -56,6 +68,7 @@ type WALManager struct {
 	activeTxns   map[uint64]bool
 	txnLastLSN   map[uint64]uint64
 	pageVersions map[page.ResourcePageID]uint64
+	txnOperations map[uint64][]RecoveryOperation // Track operations per transaction
 }
 
 func NewWALManager(filePath string) (ILogManager, error) {
@@ -72,6 +85,7 @@ func NewWALManager(filePath string) (ILogManager, error) {
 		activeTxns:        make(map[uint64]bool),
 		txnLastLSN:        make(map[uint64]uint64),
 		pageVersions:      make(map[page.ResourcePageID]uint64),
+		txnOperations:     make(map[uint64][]RecoveryOperation),
 	}, nil
 }
 
@@ -229,6 +243,7 @@ func (wm *WALManager) Recover() (*RecoveryState, error) {
 		DirtyPages:    make(DirtyPageTable),
 		UndoList:      make([]*WALRecord, 0),
 		TobeRedone:    make(map[uint64][]uint64),
+		Operations:    make([]RecoveryOperation, 0),
 	}
 
 	_ = wm.logFile.Sync()
@@ -289,11 +304,41 @@ func (wm *WALManager) analysisPhase(file *os.File, state *RecoveryState) error {
 		case ABORT:
 			state.AbortedTxns[rec.TxnID] = true
 			delete(activeTxns, rec.TxnID)
+
+		case OPERATION:
+			// Reconstruct operation from WAL record
+			// Before = operation type byte + key
+			if len(rec.Before) > 0 {
+				opType := RecordType(rec.Before[0])
+				key := rec.Before[1:]
+				value := rec.After
+
+				if _, exists := wm.txnOperations[rec.TxnID]; !exists {
+					wm.txnOperations[rec.TxnID] = make([]RecoveryOperation, 0)
+				}
+
+				op := RecoveryOperation{
+					TxnID: rec.TxnID,
+					Type:  opType,
+					Key:   key,
+					Value: value,
+				}
+				wm.txnOperations[rec.TxnID] = append(wm.txnOperations[rec.TxnID], op)
+			}
 		}
 	}
 
 	for txnID := range activeTxns {
 		state.AbortedTxns[txnID] = true
+	}
+
+	// Transfer operations from committed transactions to recovery state
+	for txnID, isCommitted := range state.CommittedTxns {
+		if isCommitted {
+			if ops, exists := wm.txnOperations[txnID]; exists {
+				state.Operations = append(state.Operations, ops...)
+			}
+		}
 	}
 
 	return nil
@@ -325,7 +370,11 @@ func (wm *WALManager) redoPhase(file *os.File, state *RecoveryState) error {
 		pageCurrentLSN[rec.PageID] = rec.LSN
 		state.LastAppliedLSN = rec.LSN
 
-		if !state.CommittedTxns[rec.TxnID] && !isExplicitlyAborted(rec.TxnID, state.AbortedTxns) {
+		// Add to TobeRedone if:
+		// 1. Transaction is committed (must redo committed transactions), OR
+		// 2. Transaction is uncertain (not committed and not explicitly aborted)
+		// Skip only if explicitly aborted
+		if !isExplicitlyAborted(rec.TxnID, state.AbortedTxns) {
 			state.TobeRedone[rec.TxnID] = append(state.TobeRedone[rec.TxnID], rec.LSN)
 		}
 	}
@@ -466,4 +515,39 @@ func (wm *WALManager) GetDirtyPages() map[page.ResourcePageID]uint64 {
 		pages[k] = v
 	}
 	return pages
+}
+
+// AddTransactionOperation records an operation for a transaction (used during normal processing)
+func (wm *WALManager) AddTransactionOperation(txnID uint64, opType RecordType, key []byte, value []byte) {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+
+	if _, exists := wm.txnOperations[txnID]; !exists {
+		wm.txnOperations[txnID] = make([]RecoveryOperation, 0)
+	}
+
+	op := RecoveryOperation{
+		TxnID: txnID,
+		Type:  opType,
+		Key:   key,
+		Value: value,
+	}
+	wm.txnOperations[txnID] = append(wm.txnOperations[txnID], op)
+
+	// Also write operation to WAL for persistence across manager restarts
+	// We store operations as structured records with Before=len(key), After=operation
+	rec := WALRecord{
+		TxnID:  txnID,
+		Type:   OPERATION,
+		Before: append([]byte{byte(opType)}, key...), // Store operation type + key
+		After:  value,                                  // Store value
+	}
+	wm.appendWALRecord(&rec)
+}
+
+// CleanupTransactionOperations removes operations for a transaction (e.g., on ABORT)
+func (wm *WALManager) CleanupTransactionOperations(txnID uint64) {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	delete(wm.txnOperations, txnID)
 }

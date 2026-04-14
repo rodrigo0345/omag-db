@@ -1,8 +1,14 @@
 package lsm
 
 import (
+	"bytes"
 	"container/heap"
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -12,6 +18,8 @@ import (
 )
 
 const SSTableMaxSize = 65536
+const LSMDataDir = "./lsm_data"
+const MetadataFile = "metadata.json"
 
 type LSMTreeBackend struct {
 	logManager    log.ILogManager
@@ -32,6 +40,25 @@ type LSMTreeBackend struct {
 	levelsLock   sync.RWMutex
 }
 
+// SSTableMetadata represents persisted SSTable information
+type SSTableMetadata struct {
+	ID    uint64 `json:"id"`
+	Level int    `json:"level"`
+}
+
+// LSMMetadata represents the complete LSM state on disk
+type LSMMetadata struct {
+	SSTableID uint64             `json:"sstable_id"`
+	SSTables  []SSTableMetadata  `json:"sstables"`
+}
+
+// PersistedSSTable represents an SSTable ready for disk storage
+type PersistedSSTable struct {
+	ID         uint64            `json:"id"`
+	Data       map[string][]byte `json:"data"`
+	Tombstones map[string]bool   `json:"tombstones"`
+}
+
 func NewLSMTreeBackend(log log.ILogManager, buf buffer.IBufferPoolManager) *LSMTreeBackend {
 	lsm := &LSMTreeBackend{
 		logManager:       log,
@@ -41,7 +68,34 @@ func NewLSMTreeBackend(log log.ILogManager, buf buffer.IBufferPoolManager) *LSMT
 		compactionPolicy: NewGarneringCompactionPolicy(10.0, 0.5, 4),
 	}
 	lsm.ssTableIdCounter.Store(1)
+
+	if err := lsm.LoadSSTables(LSMDataDir); err != nil {
+		fmt.Printf("[LSMInit] Warning: Failed to load persisted SSTables: %v\n", err)
+	}
+
 	return lsm
+}
+
+// Close gracefully shuts down the LSM backend, flushing any pending data
+func (l *LSMTreeBackend) Close() error {
+	fmt.Printf("[LSMClose] Closing LSM backend...\n")
+
+	l.memtableLock.Lock()
+	hasData := len(l.memtable.data) > 0
+	l.memtableLock.Unlock()
+
+	if hasData {
+		fmt.Printf("[LSMClose] Flushing unflushed memtable to disk before shutdown\n")
+		l.flush()
+	}
+
+	if err := l.updateMetadata(); err != nil {
+		fmt.Printf("[LSMClose] Warning: Failed to update metadata on shutdown: %v\n", err)
+		return err
+	}
+
+	fmt.Printf("[LSMClose] LSM backend closed successfully\n")
+	return nil
 }
 
 func (l *LSMTreeBackend) Get(key []byte) ([]byte, error) {
@@ -103,6 +157,7 @@ func (l *LSMTreeBackend) flush() {
 		return
 	}
 	sstable := FlushMemTable(l.ssTableIdCounter.Load(), l.memtable, 0.01)
+	sstableID := l.ssTableIdCounter.Load()
 	l.ssTableIdCounter.Add(1)
 
 	l.levelsLock.Lock()
@@ -110,10 +165,19 @@ func (l *LSMTreeBackend) flush() {
 		l.levels = append(l.levels, make([]*SSTable, 0))
 	}
 	l.levels[0] = append(l.levels[0], sstable)
+	levelNum := 0
 	l.levelsLock.Unlock()
 
 	l.memtable = NewMemTable()
 	l.memtableLock.Unlock()
+
+	if err := l.persistSSTable(sstable, sstableID, levelNum); err != nil {
+		fmt.Printf("[LSMFlush] Warning: Failed to persist SSTable %d: %v\n", sstableID, err)
+	}
+
+	if err := l.updateMetadata(); err != nil {
+		fmt.Printf("[LSMFlush] Warning: Failed to update metadata: %v\n", err)
+	}
 
 	l.compactIfNeeded()
 }
@@ -385,18 +449,452 @@ func (l *LSMTreeBackend) ReplayFromWAL(recoveryState *log.RecoveryState) error {
 		return fmt.Errorf("recovery state is nil")
 	}
 
-	l.memtable = NewMemTable()
-
+	// For LSM trees, WAL recovery is handled at the buffer pool / page level.
+	// The LSM tree's persistent data is already on disk in the form of SSTables.
+	//
+	// We do NOT reconstruct the memtable from WAL records because:
+	// 1. WAL records contain page-level changes (byte offsets), not key-value operations
+	// 2. The key information is lost at the page level
+	// 3. Flushed memtables are already persisted as SSTables with full key-value data
+	// 4. The buffer pool recovery ensures page integrity
+	//
+	// Recovery process for LSM:
+	// - Page-level recovery: Handled by WAL + buffer pool (already done)
+	// - Key-value recovery: Already persisted in SSTables on disk
+	// - Uncommitted data: Lost on crash (acceptable for LSM design)
 
 	committedCount := len(recoveryState.CommittedTxns)
 	abortedCount := len(recoveryState.AbortedTxns)
+	tobeRedoneCount := len(recoveryState.TobeRedone)
 
-	fmt.Printf("[LSMRecovery] Replaying memtable: %d committed txns, %d aborted txns\n", committedCount, abortedCount)
+	fmt.Printf("[LSMRecovery] LSM recovery - WAL handled at buffer pool level\n")
+	fmt.Printf("[LSMRecovery] Recovery state: %d committed txns, %d aborted txns, %d tobeRedone txns\n",
+		committedCount, abortedCount, tobeRedoneCount)
 
-	if committedCount > 0 {
-		fmt.Printf("[LSMRecovery] TODO: Parse %d committed transaction records from WAL\n", committedCount)
+	// IMPORTANT: LSM data recovery strategy:
+	// - Page-level data: Recovered via WAL + buffer pool (ensures page integrity)
+	// - Key-value data: Must be persisted separately (SSTables on disk)
+	// - Current limitation: SSTables are kept in-memory only, not persisted to disk
+	//
+	// TODO: Implement SSTable persistence to disk for full recovery
+	// Until then, data written before crash will be lost after recovery
+	// (This is acceptable for in-development LSM but not for production)
+
+	fmt.Printf("[LSMRecovery] WARNING: LSM SSTables are not yet persisted to disk\n")
+	fmt.Printf("[LSMRecovery] Any data flushed to SSTables before crash cannot be recovered\n")
+
+	// Start with a fresh memtable for new writes
+	l.memtable = NewMemTable()
+
+	fmt.Printf("[LSMRecovery] LSM recovery complete - ready for new writes\n")
+	return nil
+}
+
+type replayStats struct {
+	recordsProcessed  int64
+	recordsApplied    int64
+	recordsSkipped    int64
+	txnsReplayed      int64
+	errorsEncountered int64
+}
+
+func (l *LSMTreeBackend) replayAllTransactions(tobeRedone map[uint64][]uint64, lsnToRecord map[uint64]*log.WALRecord, recoveryState *log.RecoveryState, stats *replayStats) []error {
+	var errors []error
+
+	for txnID, lsns := range tobeRedone {
+		// Skip if explicitly aborted (these need undo, not redo)
+		if recoveryState.AbortedTxns[txnID] {
+			continue
+		}
+
+		if err := l.replayTransaction(txnID, lsns, lsnToRecord, stats); err != nil {
+			errors = append(errors, fmt.Errorf("txn %d replay failed: %w", txnID, err))
+		} else {
+			stats.txnsReplayed++
+		}
 	}
 
-	fmt.Printf("[LSMRecovery] Memtable replay complete\n")
+	return errors
+}
+
+func (l *LSMTreeBackend) replayTransaction(txnID uint64, lsns []uint64, lsnToRecord map[uint64]*log.WALRecord, stats *replayStats) error {
+	if len(lsns) == 0 {
+		return nil
+	}
+
+	for _, lsn := range lsns {
+		stats.recordsProcessed++
+
+		walRecord, ok := lsnToRecord[lsn]
+		if !ok {
+			stats.recordsSkipped++
+			return fmt.Errorf("LSN %d referenced in TobeRedone not found in WAL records", lsn)
+		}
+
+		if walRecord.TxnID != txnID {
+			stats.recordsSkipped++
+			return fmt.Errorf("LSN %d txnID mismatch: expected %d, got %d", lsn, txnID, walRecord.TxnID)
+		}
+
+		if walRecord.Type != log.UPDATE {
+			stats.recordsSkipped++
+			continue
+		}
+
+		// Validate After image
+		if len(walRecord.After) == 0 {
+			stats.recordsSkipped++
+			fmt.Printf("[LSMRecovery] Warning: Empty After image for LSN %d, txn %d\n", lsn, txnID)
+			continue
+		}
+
+		// Apply the After image to memtable
+		// The After image contains the value bytes; we use a synthetic key based on LSN for uniqueness
+		// In production, the key should be extracted from the page data or operation metadata
+		key := fmt.Sprintf("lsn_%d_txn_%d", lsn, txnID)
+		l.memtable.data[key] = walRecord.After
+		stats.recordsApplied++
+	}
+
 	return nil
+}
+
+func (l *LSMTreeBackend) validateRecoveryState(recoveryState *log.RecoveryState) error {
+	if len(recoveryState.CommittedTxns) == 0 && len(recoveryState.TobeRedone) == 0 && len(recoveryState.UndoList) == 0 {
+		// Empty recovery state is valid
+		return nil
+	}
+
+	// Validate no overlap between committed and aborted
+	for txnID := range recoveryState.CommittedTxns {
+		if recoveryState.AbortedTxns[txnID] {
+			return fmt.Errorf("transaction %d appears in both committed and aborted sets", txnID)
+		}
+	}
+
+	// Validate UndoList integrity
+	seenLSNs := make(map[uint64]bool)
+	for _, rec := range recoveryState.UndoList {
+		if rec == nil {
+			return fmt.Errorf("nil record in UndoList")
+		}
+		if seenLSNs[rec.LSN] {
+			return fmt.Errorf("duplicate LSN %d in UndoList", rec.LSN)
+		}
+		seenLSNs[rec.LSN] = true
+
+		if rec.LSN == 0 {
+			return fmt.Errorf("invalid LSN 0 in UndoList record")
+		}
+	}
+
+	return nil
+}
+
+func (l *LSMTreeBackend) verifyMemtableIntegrity() error {
+	if l.memtable == nil {
+		return fmt.Errorf("memtable is nil after replay")
+	}
+
+	if len(l.memtable.data) == 0 {
+		return nil
+	}
+
+	// Verify data/tombstone consistency
+	for key, value := range l.memtable.data {
+		if l.memtable.tombstones[key] && len(value) > 0 {
+			return fmt.Errorf("tombstone key %s has non-empty value", key)
+		}
+	}
+
+	return nil
+}
+
+// persistSSTable saves an SSTable to disk in binary format
+func (l *LSMTreeBackend) persistSSTable(sstable *SSTable, id uint64, level int) error {
+	levelDir := filepath.Join(LSMDataDir, fmt.Sprintf("level_%d", level))
+	if err := os.MkdirAll(levelDir, 0755); err != nil {
+		return fmt.Errorf("failed to create level directory: %w", err)
+	}
+
+	// Serialize SSTable to binary
+	buf := new(bytes.Buffer)
+
+	// Write SSTable ID (8 bytes)
+	if err := binary.Write(buf, binary.LittleEndian, id); err != nil {
+		return fmt.Errorf("failed to write SSTable ID: %w", err)
+	}
+
+	// Write number of entries (8 bytes)
+	numEntries := uint64(len(sstable.data))
+	if err := binary.Write(buf, binary.LittleEndian, numEntries); err != nil {
+		return fmt.Errorf("failed to write entry count: %w", err)
+	}
+
+	// Write each key-value pair
+	for key, value := range sstable.data {
+		keyBytes := []byte(key)
+		// Write key length (4 bytes)
+		if err := binary.Write(buf, binary.LittleEndian, uint32(len(keyBytes))); err != nil {
+			return fmt.Errorf("failed to write key length: %w", err)
+		}
+		// Write key
+		if _, err := buf.Write(keyBytes); err != nil {
+			return fmt.Errorf("failed to write key: %w", err)
+		}
+		// Write value length (4 bytes)
+		if err := binary.Write(buf, binary.LittleEndian, uint32(len(value))); err != nil {
+			return fmt.Errorf("failed to write value length: %w", err)
+		}
+		// Write value
+		if _, err := buf.Write(value); err != nil {
+			return fmt.Errorf("failed to write value: %w", err)
+		}
+	}
+
+	// Write number of tombstones (8 bytes)
+	numTombstones := uint64(len(sstable.tombstones))
+	if err := binary.Write(buf, binary.LittleEndian, numTombstones); err != nil {
+		return fmt.Errorf("failed to write tombstone count: %w", err)
+	}
+
+	// Write each tombstone key
+	for key := range sstable.tombstones {
+		keyBytes := []byte(key)
+		// Write key length (4 bytes)
+		if err := binary.Write(buf, binary.LittleEndian, uint32(len(keyBytes))); err != nil {
+			return fmt.Errorf("failed to write tombstone key length: %w", err)
+		}
+		// Write key
+		if _, err := buf.Write(keyBytes); err != nil {
+			return fmt.Errorf("failed to write tombstone key: %w", err)
+		}
+	}
+
+	// Write to file
+	filePath := filepath.Join(levelDir, fmt.Sprintf("sstable_%d.bin", id))
+	if err := ioutil.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write SSTable file: %w", err)
+	}
+
+	fmt.Printf("[LSMPersist] SSTable %d persisted to %s (%d bytes)\n", id, filePath, buf.Len())
+	return nil
+}
+
+// updateMetadata writes LSM metadata to disk
+func (l *LSMTreeBackend) updateMetadata() error {
+	// Create directory
+	if err := os.MkdirAll(LSMDataDir, 0755); err != nil {
+		return fmt.Errorf("failed to create lsm data directory: %w", err)
+	}
+
+	// Collect all SSTables
+	var sstables []SSTableMetadata
+	l.levelsLock.RLock()
+	for levelIdx, level := range l.levels {
+		for _, sstable := range level {
+			sstables = append(sstables, SSTableMetadata{
+				ID:    sstable.id,
+				Level: levelIdx,
+			})
+		}
+	}
+	l.levelsLock.RUnlock()
+
+	// Create metadata
+	metadata := LSMMetadata{
+		SSTableID: l.ssTableIdCounter.Load(),
+		SSTables:  sstables,
+	}
+
+	// Write metadata file
+	filePath := filepath.Join(LSMDataDir, MetadataFile)
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write metadata file: %w", err)
+	}
+
+	fmt.Printf("[LSMMetadata] Metadata updated: %d SSTables, next ID: %d\n", len(sstables), metadata.SSTableID)
+	return nil
+}
+
+// LoadSSTables loads all persisted SSTables from disk
+func (l *LSMTreeBackend) LoadSSTables(dir string) error {
+	metadataPath := filepath.Join(dir, MetadataFile)
+
+	// Check if metadata file exists
+	if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
+		fmt.Printf("[LSMLoad] No persisted SSTables found (metadata file missing)\n")
+		return nil // No persisted data is OK
+	}
+
+	// Read metadata file
+	metadataData, err := ioutil.ReadFile(metadataPath)
+	if err != nil {
+		return fmt.Errorf("failed to read metadata file: %w", err)
+	}
+
+	var metadata LSMMetadata
+	if err := json.Unmarshal(metadataData, &metadata); err != nil {
+		return fmt.Errorf("failed to unmarshal metadata: %w", err)
+	}
+
+	fmt.Printf("[LSMLoad] Found metadata: %d SSTables, next ID: %d\n", len(metadata.SSTables), metadata.SSTableID)
+
+	// Update SSTable ID counter
+	l.ssTableIdCounter.Store(metadata.SSTableID)
+
+	// Prepare levels
+	if len(metadata.SSTables) == 0 {
+		return nil
+	}
+
+	// Find max level
+	maxLevel := 0
+	for _, st := range metadata.SSTables {
+		if st.Level > maxLevel {
+			maxLevel = st.Level
+		}
+	}
+
+	// Initialize levels array
+	l.levelsLock.Lock()
+	l.levels = make([][]*SSTable, maxLevel+1)
+	for i := range l.levels {
+		l.levels[i] = make([]*SSTable, 0)
+	}
+	l.levelsLock.Unlock()
+
+	// Load each SSTable
+	loadedCount := 0
+	for _, stMeta := range metadata.SSTables {
+		if err := l.loadSSTable(dir, stMeta.ID, stMeta.Level); err != nil {
+			fmt.Printf("[LSMLoad] Warning: Failed to load SSTable %d from level %d: %v\n", stMeta.ID, stMeta.Level, err)
+			continue
+		}
+		loadedCount++
+	}
+
+	fmt.Printf("[LSMLoad] Successfully loaded %d SSTables\n", loadedCount)
+
+	// Recalculate total items
+	l.recalculateTotalItems()
+
+	return nil
+}
+
+// loadSSTable loads a single SSTable from disk in binary format
+func (l *LSMTreeBackend) loadSSTable(dir string, id uint64, level int) error {
+	levelDir := filepath.Join(dir, fmt.Sprintf("level_%d", level))
+	filePath := filepath.Join(levelDir, fmt.Sprintf("sstable_%d.bin", id))
+
+	// Read file
+	fileData, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read SSTable file: %w", err)
+	}
+
+	buf := bytes.NewReader(fileData)
+
+	// Read SSTable ID (8 bytes)
+	var readID uint64
+	if err := binary.Read(buf, binary.LittleEndian, &readID); err != nil {
+		return fmt.Errorf("failed to read SSTable ID: %w", err)
+	}
+
+	if readID != id {
+		return fmt.Errorf("SSTable ID mismatch: expected %d, got %d", id, readID)
+	}
+
+	// Read number of entries (8 bytes)
+	var numEntries uint64
+	if err := binary.Read(buf, binary.LittleEndian, &numEntries); err != nil {
+		return fmt.Errorf("failed to read entry count: %w", err)
+	}
+
+	// Read key-value pairs
+	data := make(map[string][]byte)
+	for i := uint64(0); i < numEntries; i++ {
+		// Read key length (4 bytes)
+		var keyLen uint32
+		if err := binary.Read(buf, binary.LittleEndian, &keyLen); err != nil {
+			return fmt.Errorf("failed to read key length: %w", err)
+		}
+		// Read key
+		keyBytes := make([]byte, keyLen)
+		if _, err := buf.Read(keyBytes); err != nil {
+			return fmt.Errorf("failed to read key: %w", err)
+		}
+		// Read value length (4 bytes)
+		var valueLen uint32
+		if err := binary.Read(buf, binary.LittleEndian, &valueLen); err != nil {
+			return fmt.Errorf("failed to read value length: %w", err)
+		}
+		// Read value
+		valueBytes := make([]byte, valueLen)
+		if _, err := buf.Read(valueBytes); err != nil {
+			return fmt.Errorf("failed to read value: %w", err)
+		}
+		data[string(keyBytes)] = valueBytes
+	}
+
+	// Read number of tombstones (8 bytes)
+	var numTombstones uint64
+	if err := binary.Read(buf, binary.LittleEndian, &numTombstones); err != nil {
+		return fmt.Errorf("failed to read tombstone count: %w", err)
+	}
+
+	// Read tombstones
+	tombstones := make(map[string]bool)
+	for i := uint64(0); i < numTombstones; i++ {
+		// Read key length (4 bytes)
+		var keyLen uint32
+		if err := binary.Read(buf, binary.LittleEndian, &keyLen); err != nil {
+			return fmt.Errorf("failed to read tombstone key length: %w", err)
+		}
+		// Read key
+		keyBytes := make([]byte, keyLen)
+		if _, err := buf.Read(keyBytes); err != nil {
+			return fmt.Errorf("failed to read tombstone key: %w", err)
+		}
+		tombstones[string(keyBytes)] = true
+	}
+
+	// Create SSTable with rebuilt bloom filter
+	bf := NewBloomFilter(uint(len(data)), 0.01)
+	for key := range data {
+		bf.Add([]byte(key))
+	}
+
+	sstable := &SSTable{
+		id:          readID,
+		data:        data,
+		tombstones:  tombstones,
+		bloomFilter: bf,
+	}
+
+	// Add to levels
+	l.levelsLock.Lock()
+	l.levels[level] = append(l.levels[level], sstable)
+	l.levelsLock.Unlock()
+
+	fmt.Printf("[LSMLoad] Loaded SSTable %d (level %d) with %d entries, %d tombstones\n", id, level, len(data), len(tombstones))
+	return nil
+}
+
+// recalculateTotalItems updates the total items count based on loaded SSTables
+func (l *LSMTreeBackend) recalculateTotalItems() {
+	l.levelsLock.RLock()
+	total := int64(len(l.memtable.data))
+	for _, level := range l.levels {
+		for _, sstable := range level {
+			total += int64(len(sstable.data))
+		}
+	}
+	l.levelsLock.RUnlock()
+	l.totalItems.Store(total)
 }

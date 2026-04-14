@@ -8,13 +8,13 @@ import (
 	"strings"
 
 	"github.com/rodrigo0345/omag/internal/concurrency"
-	"github.com/rodrigo0345/omag/internal/isolation"
 	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/btree"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/storage/lsm"
 	"github.com/rodrigo0345/omag/internal/storage/schema"
 	"github.com/rodrigo0345/omag/internal/txn"
+	"github.com/rodrigo0345/omag/internal/txn/isolation"
 	"github.com/rodrigo0345/omag/internal/txn/log"
 )
 
@@ -55,7 +55,7 @@ func NewDatabaseTUIWithConfig(recoveryConfig RecoveryConfig) (*DatabaseTUI, erro
 		return nil, fmt.Errorf("disk manager: %w", err)
 	}
 
-	replacer := concurrency.NewLRUReplacer(50)
+	replacer := concurrency.NewClockReplacer(128)
 
 	bufferPool := buffer.NewBufferPoolManagerWithReplacer(
 		50,
@@ -148,7 +148,7 @@ func NewDatabaseTUIWithConfig(recoveryConfig RecoveryConfig) (*DatabaseTUI, erro
 	// Create empty index managers map (indexes will be created when tables are created)
 	indexManagers := make(map[string]*schema.SecondaryIndexManager)
 
-	isolationMgr := isolation.NewTwoPhaseLockingManager(
+	isolationMgr := isolation.NewMVCCManager(
 		walMgr,
 		bufferPool,
 		writeHandler,

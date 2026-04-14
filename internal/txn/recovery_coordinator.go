@@ -95,12 +95,29 @@ func (rc *DefaultRecoveryCoordinator) ApplyRecoveryState(ctx context.Context, st
 }
 
 func (rc *DefaultRecoveryCoordinator) applyLSMRecovery(ctx context.Context, engine *lsm.LSMTreeBackend, state *wallog.RecoveryState) error {
-	log.Printf("[Recovery] Applying LSM recovery: replaying %d committed transactions", len(state.CommittedTxns))
+	log.Printf("[Recovery] Applying LSM recovery: replaying %d committed transactions with %d operations",
+		len(state.CommittedTxns), len(state.Operations))
 
-	if err := engine.ReplayFromWAL(state); err != nil {
-		return fmt.Errorf("LSM memtable replay failed: %w", err)
+	// Replay operations for committed transactions using Put/Delete API
+	for _, op := range state.Operations {
+		// Only replay operations from committed transactions
+		if !state.CommittedTxns[op.TxnID] {
+			continue
+		}
+
+		switch op.Type {
+		case wallog.PUT:
+			if err := engine.Put(op.Key, op.Value); err != nil {
+				log.Printf("[Recovery] Warning: Failed to replay PUT operation for txn %d: %v", op.TxnID, err)
+			}
+		case wallog.DELETE:
+			if err := engine.Delete(op.Key); err != nil {
+				log.Printf("[Recovery] Warning: Failed to replay DELETE operation for txn %d: %v", op.TxnID, err)
+			}
+		}
 	}
 
+	log.Printf("[Recovery] LSM recovery complete: replayed operations from %d committed transactions", len(state.CommittedTxns))
 	return nil
 }
 
