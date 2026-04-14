@@ -39,27 +39,18 @@ func ExtractIndexValues(tableSchema *schema.TableSchema, serializedData []byte) 
 	for indexName, index := range tableSchema.Indexes {
 		var indexValue interface{}
 
-		if len(index.Columns) == 1 {
-			colName := index.Columns[0]
+		values := make([]interface{}, 0)
+		for _, colName := range index.Columns {
 			val, exists := rowData[colName]
 			if !exists {
 				continue
 			}
-			indexValue = val
-		} else {
-			values := make([]interface{}, 0)
-			for _, colName := range index.Columns {
-				val, exists := rowData[colName]
-				if !exists {
-					continue
-				}
-				values = append(values, val)
-			}
-			if len(values) != len(index.Columns) {
-				continue
-			}
-			indexValue = values
+			values = append(values, val)
 		}
+		if len(values) != len(index.Columns) {
+			continue
+		}
+		indexValue = values
 
 		indexBytes, err := json.Marshal(indexValue)
 		if err != nil {

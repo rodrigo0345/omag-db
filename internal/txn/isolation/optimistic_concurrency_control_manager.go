@@ -2,6 +2,7 @@ package isolation
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
@@ -11,6 +12,7 @@ import (
 )
 
 type OptimisticConcurrencyControlManager struct {
+	mu              sync.RWMutex
 	transactions    map[TransactionID]*txn.Transaction
 	logManager      log.ILogManager
 	bufferManager   buffer.IBufferPoolManager
@@ -46,6 +48,9 @@ func NewOptimisticConcurrencyControlManager(
 }
 
 func (m *OptimisticConcurrencyControlManager) BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	txnID := m.nextTxnID
 	m.nextTxnID++
 
@@ -60,7 +65,10 @@ func (m *OptimisticConcurrencyControlManager) BeginTransaction(isolationLevel ui
 }
 
 func (m *OptimisticConcurrencyControlManager) Read(txnID int64, Key []byte) ([]byte, error) {
+	m.mu.RLock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	m.mu.RUnlock()
+
 	if !ok {
 		return nil, fmt.Errorf("transaction %d not found", txnID)
 	}
@@ -70,15 +78,19 @@ func (m *OptimisticConcurrencyControlManager) Read(txnID int64, Key []byte) ([]b
 }
 
 func (m *OptimisticConcurrencyControlManager) Write(txnID int64, Key []byte, Value []byte) error {
+	m.mu.RLock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	userWriteRecord := m.userWrites[TransactionID(txnID)]
+	m.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
 
 	tableName, tableSchema := transaction.GetTableContext()
 
-	if m.userWrites[TransactionID(txnID)] != nil {
-		m.userWrites[TransactionID(txnID)][tableName] = true
+	if userWriteRecord != nil {
+		userWriteRecord[tableName] = true
 	}
 
 	if tableSchema != nil && m.indexManagers != nil {
@@ -103,13 +115,17 @@ func (m *OptimisticConcurrencyControlManager) Write(txnID int64, Key []byte, Val
 }
 
 func (m *OptimisticConcurrencyControlManager) Commit(txnID int64) error {
+	m.mu.RLock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	userWriteRecord := m.userWrites[TransactionID(txnID)]
+	m.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
 
 	tableName, _ := transaction.GetTableContext()
-	if tableName != "" && m.userWrites[TransactionID(txnID)][tableName] {
+	if tableName != "" && userWriteRecord != nil && userWriteRecord[tableName] {
 		if err := m.detectIndexConflicts(TransactionID(txnID), tableName); err != nil {
 			m.rollbackManager.RollbackTransaction(transaction, nil, nil)
 			return fmt.Errorf("OCC index conflict detection failed: %w", err)
@@ -130,20 +146,24 @@ func (m *OptimisticConcurrencyControlManager) Commit(txnID int64) error {
 		m.logManager.Flush(lsn)
 	}
 
+	m.mu.Lock()
 	delete(m.indexSnapshots, TransactionID(txnID))
 	delete(m.userWrites, TransactionID(txnID))
+	m.mu.Unlock()
 
 	return nil
 }
 
 func (m *OptimisticConcurrencyControlManager) Abort(txnID int64) error {
+	m.mu.Lock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	delete(m.indexSnapshots, TransactionID(txnID))
+	delete(m.userWrites, TransactionID(txnID))
+	m.mu.Unlock()
+
 	if !ok {
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
-
-	delete(m.indexSnapshots, TransactionID(txnID))
-	delete(m.userWrites, TransactionID(txnID))
 
 	return m.rollbackManager.RollbackTransaction(transaction, nil, nil)
 }

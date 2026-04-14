@@ -1,0 +1,75 @@
+@startuml
+namespace isolation {
+    class "MVCCManager" << (S,Aquamarine) >> {
+        - transactions <font color=blue>map</font>[TransactionID]*txn.Transaction
+        - logManager log.ILogManager
+        - bufferManager buffer.IBufferPoolManager
+        - writeHandler txn.WriteHandler
+        - rollbackManager *txn.RollbackManager
+        - primaryIndex storage.IStorageEngine
+        - indexManagers <font color=blue>map</font>[string]*schema.SecondaryIndexManager
+        - nextTxnID int64
+        - indexSnapshots <font color=blue>map</font>[TransactionID]<font color=blue>map</font>[string]string
+
+        - captureIndexSnapshot(tableName string) <font color=blue>map</font>[string]string
+        - validateIndexSnapshot(txnID TransactionID, tableName string) error
+
+        + BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64
+        + Read(txnID int64, Key []byte) ([]byte, error)
+        + Write(txnID int64, Key []byte, Value []byte) error
+        + Commit(txnID int64) error
+        + Abort(txnID int64) error
+        + Close() error
+
+    }
+    class "OptimisticConcurrencyControlManager" << (S,Aquamarine) >> {
+        - transactions <font color=blue>map</font>[TransactionID]*txn.Transaction
+        - logManager log.ILogManager
+        - bufferManager buffer.IBufferPoolManager
+        - writeHandler txn.WriteHandler
+        - rollbackManager *txn.RollbackManager
+        - primaryIndex storage.IStorageEngine
+        - indexManagers <font color=blue>map</font>[string]*schema.SecondaryIndexManager
+        - nextTxnID int64
+        - indexSnapshots <font color=blue>map</font>[TransactionID]<font color=blue>map</font>[string]string
+        - userWrites <font color=blue>map</font>[TransactionID]<font color=blue>map</font>[string]bool
+
+        - captureIndexSnapshot(tableName string) <font color=blue>map</font>[string]string
+        - detectIndexConflicts(txnID TransactionID, tableName string) error
+
+        + BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64
+        + Read(txnID int64, Key []byte) ([]byte, error)
+        + Write(txnID int64, Key []byte, Value []byte) error
+        + Commit(txnID int64) error
+        + Abort(txnID int64) error
+        + Close() error
+
+    }
+    class "TwoPhaseLockingManager" << (S,Aquamarine) >> {
+        - transactions <font color=blue>map</font>[TransactionID]*txn.Transaction
+        - logManager log.ILogManager
+        - bufferManager buffer.IBufferPoolManager
+        - writeHandler txn.WriteHandler
+        - rollbackManager *txn.RollbackManager
+        - primaryIndex storage.IStorageEngine
+        - indexManagers <font color=blue>map</font>[string]*schema.SecondaryIndexManager
+
+        - acquireIndexLocks(transaction *txn.Transaction, tableName string, tableSchema *schema.TableSchema, rowData []byte) error
+        - releaseIndexLocks(transaction *txn.Transaction, tableName string, tableSchema *schema.TableSchema, rowData []byte) error
+
+        + BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64
+        + Read(txnID int64, Key []byte) ([]byte, error)
+        + Write(txnID int64, Key []byte, Value []byte) error
+        + Commit(txnID int64) error
+        + Abort(txnID int64) error
+        + Close() error
+
+    }
+    class "isolation.TransactionID" << (T, #FF7700) >>  {
+    }
+}
+"__builtin__.uint64" #.. "isolation.TransactionID"
+
+
+
+@enduml

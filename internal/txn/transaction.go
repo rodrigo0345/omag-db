@@ -96,6 +96,14 @@ func (t *Transaction) GetIsolationLevel() uint8 {
 	return t.isolationLevel
 }
 
+func (t *Transaction) GetSharedLocks() [][]byte {
+	return t.sharedLocks
+}
+
+func (t *Transaction) GetExclusiveLocks() [][]byte {
+	return t.exclusiveLocks
+}
+
 func (t *Transaction) Commit() {
 	t.state = COMMITTED
 }

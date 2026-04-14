@@ -2,6 +2,7 @@ package isolation
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
@@ -11,6 +12,7 @@ import (
 )
 
 type MVCCManager struct {
+	mu              sync.RWMutex
 	transactions    map[TransactionID]*txn.Transaction
 	logManager      log.ILogManager
 	bufferManager   buffer.IBufferPoolManager
@@ -44,6 +46,9 @@ func NewMVCCManager(
 }
 
 func (m *MVCCManager) BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	txnID := m.nextTxnID
 	m.nextTxnID++
 
@@ -57,7 +62,10 @@ func (m *MVCCManager) BeginTransaction(isolationLevel uint8, tableName string, t
 }
 
 func (m *MVCCManager) Read(txnID int64, Key []byte) ([]byte, error) {
+	m.mu.RLock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	m.mu.RUnlock()
+
 	if !ok {
 		return nil, fmt.Errorf("transaction %d not found", txnID)
 	}
@@ -67,7 +75,10 @@ func (m *MVCCManager) Read(txnID int64, Key []byte) ([]byte, error) {
 }
 
 func (m *MVCCManager) Write(txnID int64, Key []byte, Value []byte) error {
+	m.mu.RLock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	m.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
@@ -96,7 +107,10 @@ func (m *MVCCManager) Write(txnID int64, Key []byte, Value []byte) error {
 }
 
 func (m *MVCCManager) Commit(txnID int64) error {
+	m.mu.RLock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	m.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
@@ -122,18 +136,23 @@ func (m *MVCCManager) Commit(txnID int64) error {
 		m.logManager.Flush(lsn)
 	}
 
+	m.mu.Lock()
 	delete(m.indexSnapshots, TransactionID(txnID))
+	m.mu.Unlock()
 
 	return nil
 }
 
 func (m *MVCCManager) Abort(txnID int64) error {
+	m.mu.Lock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	delete(m.indexSnapshots, TransactionID(txnID))
+	m.mu.Unlock()
+
 	if !ok {
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
 
-	delete(m.indexSnapshots, TransactionID(txnID))
 	return m.rollbackManager.RollbackTransaction(transaction, nil, nil)
 }
 

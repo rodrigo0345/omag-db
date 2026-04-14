@@ -1,0 +1,39 @@
+@startuml
+namespace storage {
+    interface "IStorageEngine"  {
+        + Put(key []byte, value []byte) error
+        + Get(key []byte) ([]byte, error)
+        + Delete(key []byte) error
+        + Scan() ([]ScanEntry, error)
+
+    }
+    interface "ITableStorageEngine"  {
+        + CreateTable(tableSchema *schema.TableSchema) error
+        + DropTable(tableName string) error
+        + GetTableSchema(tableName string) (*schema.TableSchema, error)
+        + TablePut(tableName string, key []byte, value []byte) error
+        + TableGet(tableName string, key []byte) ([]byte, error)
+        + TableDelete(tableName string, key []byte) error
+        + CreateIndex(tableName string, indexName string, indexType schema.IndexType, columns []string) error
+        + DropIndex(tableName string, indexName string) error
+        + IndexGet(tableName string, indexName string, key []byte) ([][]byte, error)
+        + IndexScan(tableName string, indexName string, startKey []byte, endKey []byte) ([][]byte, error)
+        + UpdateSecondaryIndexes(tableName string, operation string, oldRow <font color=blue>map</font>[string][]byte, newRow <font color=blue>map</font>[string][]byte) error
+
+    }
+    class "ScanEntry" << (S,Aquamarine) >> {
+        + Key []byte
+        + Value []byte
+
+    }
+    class "TableStorageOptions" << (S,Aquamarine) >> {
+        + AutoIndexUpdate bool
+        + MaxIndexesPerTable int
+
+    }
+}
+"storage.IStorageEngine" *-- "storage.ITableStorageEngine"
+
+
+
+@enduml

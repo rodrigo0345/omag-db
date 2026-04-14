@@ -63,7 +63,6 @@ func (tm *TransactionManager) RollbackRemainingTransactions(ctx context.Context,
 
 	stdlog.Printf("[TransactionManager] Rolling back %d uncommitted transactions", abortedCount)
 
-
 	for txnID := range recoveryState.AbortedTxns {
 		stdlog.Printf("[TransactionManager] Rollback aborted transaction: %d", txnID)
 	}

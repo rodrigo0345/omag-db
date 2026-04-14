@@ -3,18 +3,22 @@ package isolation
 import (
 	"bytes"
 	"fmt"
+	"sync"
 
 	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/storage/schema"
 	"github.com/rodrigo0345/omag/internal/txn"
+	"github.com/rodrigo0345/omag/internal/txn/lock"
 	"github.com/rodrigo0345/omag/internal/txn/log"
 )
 
 type TransactionID uint64
 
 type TwoPhaseLockingManager struct {
+	mu              sync.RWMutex
 	transactions    map[TransactionID]*txn.Transaction
+	lockManager     *lock.LockManager
 	logManager      log.ILogManager
 	bufferManager   buffer.IBufferPoolManager
 	writeHandler    txn.WriteHandler
@@ -33,6 +37,7 @@ func NewTwoPhaseLockingManager(
 ) *TwoPhaseLockingManager {
 	return &TwoPhaseLockingManager{
 		transactions:    make(map[TransactionID]*txn.Transaction),
+		lockManager:     lock.NewLockManager(),
 		logManager:      logManager,
 		bufferManager:   bufferMgr,
 		writeHandler:    writeHandler,
@@ -43,6 +48,9 @@ func NewTwoPhaseLockingManager(
 }
 
 func (m *TwoPhaseLockingManager) BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	txnID := int64(len(m.transactions) + 1)
 	txn := txn.NewTransaction(uint64(txnID), isolationLevel)
 	txn.SetTableContext(tableName, tableSchema)
@@ -51,22 +59,59 @@ func (m *TwoPhaseLockingManager) BeginTransaction(isolationLevel uint8, tableNam
 }
 
 func (m *TwoPhaseLockingManager) Read(txnID int64, Key []byte) ([]byte, error) {
+	m.mu.RLock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	m.mu.RUnlock()
+
 	if !ok {
 		return nil, fmt.Errorf("transaction %d not found", txnID)
 	}
 
-	transaction.AddSharedLock(Key)
-	return m.primaryIndex.Get(Key)
+	switch transaction.GetIsolationLevel() {
+	case txn.READ_UNCOMMITTED:
+
+		return m.primaryIndex.Get(Key)
+
+	case txn.READ_COMMITTED:
+
+		if err := m.lockManager.LockShared(transaction, Key); err != nil {
+			return nil, err
+		}
+		defer m.lockManager.Unlock(transaction, Key)
+
+		return m.primaryIndex.Get(Key)
+
+	case txn.REPEATABLE_READ:
+
+		if err := m.lockManager.LockShared(transaction, Key); err != nil {
+			return nil, err
+		}
+		return m.primaryIndex.Get(Key)
+
+	case txn.SERIALIZABLE:
+
+		if err := m.lockManager.LockShared(transaction, Key); err != nil {
+			return nil, err
+		}
+		return m.primaryIndex.Get(Key)
+
+	default:
+		return nil, fmt.Errorf("unsupported isolation level: %d", transaction.GetIsolationLevel())
+	}
 }
 
 func (m *TwoPhaseLockingManager) Write(txnID int64, Key []byte, Value []byte) error {
+	m.mu.RLock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	m.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
 
-	transaction.AddExclusiveLock(Key)
+	if err := m.lockManager.LockExclusive(transaction, Key); err != nil {
+		return err
+	}
 
 	tableName, tableSchema := transaction.GetTableContext()
 
@@ -96,12 +141,22 @@ func (m *TwoPhaseLockingManager) Write(txnID int64, Key []byte, Value []byte) er
 }
 
 func (m *TwoPhaseLockingManager) Commit(txnID int64) error {
+	m.mu.RLock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	m.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
 
 	transaction.Commit()
+
+	for _, key := range transaction.GetSharedLocks() {
+		m.lockManager.Unlock(transaction, key)
+	}
+	for _, key := range transaction.GetExclusiveLocks() {
+		m.lockManager.Unlock(transaction, key)
+	}
 
 	if m.logManager != nil {
 		rec := &log.WALRecord{
@@ -125,16 +180,29 @@ func (m *TwoPhaseLockingManager) Commit(txnID int64) error {
 }
 
 func (m *TwoPhaseLockingManager) Abort(txnID int64) error {
+	m.mu.RLock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	m.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
 
-	return m.rollbackManager.RollbackTransaction(
+	err := m.rollbackManager.RollbackTransaction(
 		transaction,
 		nil,
 		nil,
 	)
+
+	// Release all locks
+	for _, key := range transaction.GetSharedLocks() {
+		m.lockManager.Unlock(transaction, key)
+	}
+	for _, key := range transaction.GetExclusiveLocks() {
+		m.lockManager.Unlock(transaction, key)
+	}
+
+	return err
 }
 
 func (m *TwoPhaseLockingManager) Close() error {
@@ -164,7 +232,9 @@ func (m *TwoPhaseLockingManager) acquireIndexLocks(transaction *txn.Transaction,
 
 	for indexName, indexValue := range indexValues {
 		lockKey := makeIndexLockKey(tableName, indexName, indexValue)
-		transaction.AddExclusiveLock(lockKey)
+		if err := m.lockManager.LockExclusive(transaction, lockKey); err != nil {
+			return err
+		}
 	}
 
 	return nil
