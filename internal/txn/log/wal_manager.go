@@ -47,6 +47,8 @@ type RecoveryState struct {
 	CommittedTxns map[uint64]bool
 	AbortedTxns   map[uint64]bool
 	PageStates    map[page.ResourcePageID][]byte
+	MaxTxnID      uint64
+	CommitRecords uint64
 
 	CheckpointMetadata *CheckpointMetadata
 	LastCheckpointLSN  uint64
@@ -252,6 +254,9 @@ func (wm *WALManager) Recover() (*RecoveryState, error) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
+	// Rebuild transaction operation cache from WAL for each recovery run.
+	wm.txnOperations = make(map[uint64][]RecoveryOperation)
+
 	state := &RecoveryState{
 		CommittedTxns: make(map[uint64]bool),
 		AbortedTxns:   make(map[uint64]bool),
@@ -303,6 +308,10 @@ func (wm *WALManager) analysisPhase(file *os.File, state *RecoveryState) error {
 			return err
 		}
 
+		if rec.TxnID > state.MaxTxnID {
+			state.MaxTxnID = rec.TxnID
+		}
+
 		switch rec.Type {
 		case CHECKPOINT:
 			state.LastCheckpointLSN = rec.LSN
@@ -315,6 +324,7 @@ func (wm *WALManager) analysisPhase(file *os.File, state *RecoveryState) error {
 
 		case COMMIT:
 			state.CommittedTxns[rec.TxnID] = true
+			state.CommitRecords++
 			delete(activeTxns, rec.TxnID)
 
 		case ABORT:

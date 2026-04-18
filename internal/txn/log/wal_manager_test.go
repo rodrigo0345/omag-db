@@ -668,6 +668,46 @@ func TestAppendLog_EmptyDataFields(t *testing.T) {
 	}
 }
 
+func TestRecover_TracksMaxTxnIDAndCommitRecords(t *testing.T) {
+	walFile := getTempWalFile(t)
+	defer os.Remove(walFile)
+
+	wm, err := NewWALManager(walFile)
+	if err != nil {
+		t.Fatalf("NewWALManager() error = %v", err)
+	}
+
+	for _, txnID := range []uint64{1, 2, 1, 4, 2} {
+		if _, err := wm.AppendLogRecord(WALRecord{TxnID: txnID, Type: COMMIT}); err != nil {
+			t.Fatalf("AppendLogRecord(COMMIT txn=%d) error = %v", txnID, err)
+		}
+	}
+	if err := wm.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	wm2, err := NewWALManager(walFile)
+	if err != nil {
+		t.Fatalf("NewWALManager() reopen error = %v", err)
+	}
+	defer wm2.Close()
+
+	state, err := wm2.Recover()
+	if err != nil {
+		t.Fatalf("Recover() error = %v", err)
+	}
+
+	if state.MaxTxnID != 4 {
+		t.Fatalf("state.MaxTxnID = %d, want 4", state.MaxTxnID)
+	}
+	if state.CommitRecords != 5 {
+		t.Fatalf("state.CommitRecords = %d, want 5", state.CommitRecords)
+	}
+	if len(state.CommittedTxns) != 3 {
+		t.Fatalf("len(state.CommittedTxns) = %d, want 3 unique txn IDs", len(state.CommittedTxns))
+	}
+}
+
 func getTempWalFile(t *testing.T) string {
 	tmpDir := t.TempDir()
 	return filepath.Join(tmpDir, "test.wal")

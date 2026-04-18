@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
@@ -29,6 +30,7 @@ type TwoPhaseLockingManager struct {
 	primaryIndex    storage.IStorageEngine
 	storageResolver func(tableName string) storage.IStorageEngine
 	indexManagers   map[string]*schema.SecondaryIndexManager
+	nextTxnID       atomic.Int64
 }
 
 func NewTwoPhaseLockingManager(
@@ -70,11 +72,26 @@ func (m *TwoPhaseLockingManager) BeginTransaction(isolationLevel uint8, tableNam
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	txnID := int64(len(m.transactions) + 1)
+	txnID := m.nextTxnID.Add(1)
 	txn := txn_unit.NewTransaction(uint64(txnID), isolationLevel)
 	txn.SetTableContext(tableName, tableSchema)
 	m.transactions[TransactionID(txnID)] = txn
 	return txnID
+}
+
+// EnsureMinNextTxnID seeds the in-memory transaction ID allocator so the next
+// BeginTransaction call returns an ID greater than any recovered WAL txn ID.
+func (m *TwoPhaseLockingManager) EnsureMinNextTxnID(lastTxnID uint64) {
+	target := int64(lastTxnID)
+	for {
+		current := m.nextTxnID.Load()
+		if current >= target {
+			return
+		}
+		if m.nextTxnID.CompareAndSwap(current, target) {
+			return
+		}
+	}
 }
 
 func (m *TwoPhaseLockingManager) Read(txnID int64, Key []byte) ([]byte, error) {

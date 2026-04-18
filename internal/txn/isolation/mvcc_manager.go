@@ -78,6 +78,21 @@ func (m *MVCCManager) BeginTransaction(isolationLevel uint8, tableName string, t
 	return txnID
 }
 
+// EnsureMinNextTxnID seeds the in-memory transaction ID allocator so the next
+// BeginTransaction call returns an ID greater than any recovered WAL txn ID.
+func (m *MVCCManager) EnsureMinNextTxnID(lastTxnID uint64) {
+	target := int64(lastTxnID)
+	for {
+		current := m.nextTxnID.Load()
+		if current >= target {
+			return
+		}
+		if m.nextTxnID.CompareAndSwap(current, target) {
+			return
+		}
+	}
+}
+
 func (m *MVCCManager) Read(txnID int64, Key []byte) ([]byte, error) {
 	m.mu.RLock()
 	transaction, ok := m.transactions[TransactionID(txnID)]

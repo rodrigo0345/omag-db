@@ -69,6 +69,12 @@ func ExtractTables(sqlText string) ([]string, error) {
 			if idx >= 0 {
 				remainder := raw[idx+len(keyword):]
 				tableName := extractFirstToken(remainder)
+				if keyword == "INDEX " {
+					if onIdx := strings.Index(strings.ToUpper(remainder), " ON "); onIdx >= 0 {
+						indexRemainder := remainder[onIdx+4:]
+						tableName = extractFirstToken(indexRemainder)
+					}
+				}
 				addTable(&tables, seen, tableName)
 				break
 			}

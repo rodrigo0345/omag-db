@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/rodrigo0345/omag/internal/database"
 	"github.com/rodrigo0345/omag/internal/pgserver"
@@ -48,7 +52,18 @@ func main() {
 	}()
 
 	srv := pgserver.New(engine)
-	if err := srv.ListenAndServe(*listenAddr); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	ln, err := net.Listen("tcp", *listenAddr)
+	if err != nil {
+		if _, writeErr := fmt.Fprintln(os.Stderr, "failed to listen:", err); writeErr != nil {
+			_ = writeErr
+		}
+		os.Exit(1)
+	}
+
+	if err := srv.Serve(ctx, ln); err != nil && err != context.Canceled {
 		if _, writeErr := fmt.Fprintln(os.Stderr, "server error:", err); writeErr != nil {
 			_ = writeErr
 		}

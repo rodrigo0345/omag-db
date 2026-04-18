@@ -66,8 +66,8 @@ func (rc *DefaultRecoveryCoordinator) RecoverFromCrash(ctx context.Context) (*wa
 		return nil, fmt.Errorf("WAL recovery failed: %w", err)
 	}
 
-	log.Printf("[Recovery] WAL recovery complete: %d committed txns, %d aborted txns",
-		len(state.CommittedTxns), len(state.AbortedTxns))
+	log.Printf("[Recovery] WAL recovery complete: %d commit records across %d committed txn IDs, %d aborted txn IDs",
+		state.CommitRecords, len(state.CommittedTxns), len(state.AbortedTxns))
 
 	log.Printf("[Recovery] Applying recovery state to storage engine...")
 	if err := rc.ApplyRecoveryState(ctx, state); err != nil {

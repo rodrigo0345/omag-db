@@ -9,6 +9,7 @@ import (
 	"net"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/jackc/pgproto3/v2"
 	"github.com/rodrigo0345/omag/internal/database"
 	"github.com/rodrigo0345/omag/internal/storage/schema"
+	"github.com/rodrigo0345/omag/internal/txn/txn_unit"
 	applog "github.com/rodrigo0345/omag/pkg/log"
 )
 
@@ -46,6 +48,9 @@ type Server struct {
 
 type connSession struct {
 	inTransaction bool
+	txnID         int64
+	txnTableName  string
+	txnTableSchema *schema.TableSchema
 	status        byte
 }
 
@@ -254,13 +259,41 @@ func (s *Server) handleQuery(sess *connSession, sqlText string) (statementResult
 func (s *Server) executeStatement(sess *connSession, stmt string) (statementResult, error) {
 	switch {
 	case reBegin.MatchString(stmt):
+		if sess.inTransaction {
+			return statementResult{}, fmt.Errorf("transaction already in progress")
+		}
 		sess.inTransaction = true
+		sess.txnID = 0
+		sess.txnTableName = ""
+		sess.txnTableSchema = nil
 		return statementResult{messages: []pgproto3.BackendMessage{&pgproto3.CommandComplete{CommandTag: []byte("BEGIN")}}, status: 'T'}, nil
 	case reCommit.MatchString(stmt):
+		if !sess.inTransaction {
+			return statementResult{}, fmt.Errorf("no transaction is in progress")
+		}
+		if sess.txnID != 0 {
+			if err := s.db.Commit(sess.txnID); err != nil {
+				return statementResult{}, err
+			}
+		}
 		sess.inTransaction = false
+		sess.txnID = 0
+		sess.txnTableName = ""
+		sess.txnTableSchema = nil
 		return statementResult{messages: []pgproto3.BackendMessage{&pgproto3.CommandComplete{CommandTag: []byte("COMMIT")}}, status: 'I'}, nil
 	case reRollback.MatchString(stmt):
+		if !sess.inTransaction {
+			return statementResult{}, fmt.Errorf("no transaction is in progress")
+		}
+		if sess.txnID != 0 {
+			if err := s.db.Abort(sess.txnID); err != nil {
+				return statementResult{}, err
+			}
+		}
 		sess.inTransaction = false
+		sess.txnID = 0
+		sess.txnTableName = ""
+		sess.txnTableSchema = nil
 		return statementResult{messages: []pgproto3.BackendMessage{&pgproto3.CommandComplete{CommandTag: []byte("ROLLBACK")}}, status: 'I'}, nil
 	case reSet.MatchString(stmt):
 		return statementResult{messages: []pgproto3.BackendMessage{&pgproto3.CommandComplete{CommandTag: []byte("SET")}}}, nil
@@ -275,11 +308,11 @@ func (s *Server) executeStatement(sess *connSession, stmt string) (statementResu
 	case reDropIndex.MatchString(stmt):
 		return s.execDropIndex(stmt)
 	case reInsert.MatchString(stmt):
-		return s.execInsert(stmt)
+		return s.execInsert(sess, stmt)
 	case reUpdate.MatchString(stmt):
-		return s.execUpdate(stmt)
+		return s.execUpdate(sess, stmt)
 	case reDelete.MatchString(stmt):
-		return s.execDelete(stmt)
+		return s.execDelete(sess, stmt)
 	case reSelect.MatchString(stmt):
 		return s.execSelect(stmt)
 	case reSimpleSelect.MatchString(stmt):
@@ -287,6 +320,37 @@ func (s *Server) executeStatement(sess *connSession, stmt string) (statementResu
 	default:
 		return statementResult{}, fmt.Errorf("unsupported SQL statement: %s", stmt)
 	}
+}
+
+func (s *Server) beginMutationTxn(sess *connSession, tableName string, tableSchema *schema.TableSchema) (txnID int64, started bool, err error) {
+	if sess == nil {
+		return 0, false, fmt.Errorf("session is nil")
+	}
+
+	if sess.txnID != 0 {
+		if sess.txnTableName != "" && tableName != "" && sess.txnTableName != tableName {
+			return 0, false, fmt.Errorf("transaction already bound to table %q", sess.txnTableName)
+		}
+		if sess.txnTableName == "" && tableName != "" {
+			sess.txnTableName = tableName
+			sess.txnTableSchema = tableSchema
+		}
+		return sess.txnID, false, nil
+	}
+
+	txnID = s.db.BeginTransaction(txn_unit.READ_COMMITTED, tableName, tableSchema)
+	if txnID <= 0 {
+		return 0, false, fmt.Errorf("failed to begin transaction")
+	}
+
+	started = true
+	if sess.inTransaction {
+		sess.txnID = txnID
+		sess.txnTableName = tableName
+		sess.txnTableSchema = tableSchema
+	}
+
+	return txnID, started, nil
 }
 
 func (s *Server) execCreateTable(stmt string) (statementResult, error) {
@@ -343,6 +407,9 @@ func (s *Server) execCreateTable(stmt string) (statementResult, error) {
 	}
 	// Rebuild schema with the actual primary key value.
 	tableSchema.PrimaryKey = primaryKey
+	if pkCol, ok := tableSchema.Columns[primaryKey]; ok {
+		pkCol.Nullable = false
+	}
 	if err := tableSchema.Validate(); err != nil {
 		return statementResult{}, err
 	}
@@ -415,7 +482,7 @@ func (s *Server) execDropIndex(stmt string) (statementResult, error) {
 	return statementResult{}, fmt.Errorf("index %q not found", indexName)
 }
 
-func (s *Server) execInsert(stmt string) (statementResult, error) {
+func (s *Server) execInsert(sess *connSession, stmt string) (statementResult, error) {
 	m := reInsert.FindStringSubmatch(stmt)
 	if len(m) != 4 {
 		return statementResult{}, fmt.Errorf("invalid INSERT statement")
@@ -450,14 +517,21 @@ func (s *Server) execInsert(stmt string) (statementResult, error) {
 	if _, ok := row[tableSchema.PrimaryKey]; !ok {
 		return statementResult{}, fmt.Errorf("primary key %q must be included", tableSchema.PrimaryKey)
 	}
+	engine := s.db.TableStorageEngine(tableName)
+	if engine == nil {
+		return statementResult{}, fmt.Errorf("table %q not found", tableName)
+	}
+	if _, err := engine.Get([]byte(row[tableSchema.PrimaryKey])); err == nil {
+		return statementResult{}, fmt.Errorf("duplicate primary key value %q", row[tableSchema.PrimaryKey])
+	}
 
-	if err := s.writeRow(tableName, tableSchema, row); err != nil {
+	if err := s.writeRow(sess, tableName, tableSchema, row); err != nil {
 		return statementResult{}, err
 	}
 	return statementResult{messages: []pgproto3.BackendMessage{&pgproto3.CommandComplete{CommandTag: []byte("INSERT 0 1")}}}, nil
 }
 
-func (s *Server) execUpdate(stmt string) (statementResult, error) {
+func (s *Server) execUpdate(sess *connSession, stmt string) (statementResult, error) {
 	m := reUpdate.FindStringSubmatch(stmt)
 	if len(m) != 4 {
 		return statementResult{}, fmt.Errorf("invalid UPDATE statement")
@@ -478,7 +552,7 @@ func (s *Server) execUpdate(stmt string) (statementResult, error) {
 		return statementResult{}, err
 	}
 
-	count, err := s.updateRows(tableName, tableSchema, setMap, whereMap)
+	count, err := s.updateRows(sess, tableName, tableSchema, setMap, whereMap)
 	if err != nil {
 		return statementResult{}, err
 	}
@@ -486,7 +560,7 @@ func (s *Server) execUpdate(stmt string) (statementResult, error) {
 	return statementResult{messages: []pgproto3.BackendMessage{&pgproto3.CommandComplete{CommandTag: []byte(fmt.Sprintf("UPDATE %d", count))}}}, nil
 }
 
-func (s *Server) execDelete(stmt string) (statementResult, error) {
+func (s *Server) execDelete(sess *connSession, stmt string) (statementResult, error) {
 	m := reDelete.FindStringSubmatch(stmt)
 	if len(m) != 3 {
 		return statementResult{}, fmt.Errorf("invalid DELETE statement")
@@ -506,7 +580,7 @@ func (s *Server) execDelete(stmt string) (statementResult, error) {
 		}
 	}
 
-	count, err := s.deleteRows(tableName, tableSchema, whereMap)
+	count, err := s.deleteRows(sess, tableName, tableSchema, whereMap)
 	if err != nil {
 		return statementResult{}, err
 	}
@@ -609,7 +683,7 @@ func (s *Server) execShow(stmt string) (statementResult, error) {
 		"search_path":                 "public",
 		"transaction_isolation":       "read committed",
 		"transaction_read_only":       "off",
-		"DateStyle":                   "ISO, MDY",
+		"datestyle":                   "ISO, MDY",
 		"integer_datetimes":           "on",
 	}[name]
 	if value == "" {
@@ -663,30 +737,110 @@ func (s *Server) readRows(tableName string, tableSchema *schema.TableSchema) ([]
 		}
 		rows = append(rows, row)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i][tableSchema.PrimaryKey] < rows[j][tableSchema.PrimaryKey] })
+	pkType := schema.DataTypeString
+	if colType, err := tableSchema.ColumnDataType(tableSchema.PrimaryKey); err == nil {
+		pkType = colType
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return compareRowValues(rows[i][tableSchema.PrimaryKey], rows[j][tableSchema.PrimaryKey], pkType) < 0
+	})
 	return rows, nil
 }
 
-func (s *Server) writeRow(tableName string, tableSchema *schema.TableSchema, row map[string]string) error {
-	engine := s.db.TableStorageEngine(tableName)
-	if engine == nil {
-		return fmt.Errorf("table %q not found", tableName)
+func (s *Server) writeRow(sess *connSession, tableName string, tableSchema *schema.TableSchema, row map[string]string) (err error) {
+	if tableSchema == nil {
+		return fmt.Errorf("table schema is nil")
 	}
-	key := row[tableSchema.PrimaryKey]
-	payload, err := json.Marshal(row)
+
+	txnID, started, err := s.beginMutationTxn(sess, tableName, tableSchema)
 	if err != nil {
 		return err
 	}
-	return engine.Put([]byte(key), payload)
+	if sess != nil && sess.inTransaction && sess.txnID == 0 {
+		sess.txnID = txnID
+		sess.txnTableName = tableName
+		sess.txnTableSchema = tableSchema
+	}
+
+	defer func() {
+		if err != nil {
+			if abortErr := s.db.Abort(txnID); abortErr != nil {
+				err = errors.Join(err, abortErr)
+			}
+			if sess != nil && sess.inTransaction {
+				sess.inTransaction = false
+				sess.txnID = 0
+				sess.txnTableName = ""
+				sess.txnTableSchema = nil
+			}
+			return
+		}
+
+		if started && (sess == nil || !sess.inTransaction) {
+			if commitErr := s.db.Commit(txnID); commitErr != nil {
+				if abortErr := s.db.Abort(txnID); abortErr != nil {
+					err = errors.Join(commitErr, abortErr)
+					return
+				}
+				err = commitErr
+			}
+		}
+	}()
+
+	payload, marshalErr := json.Marshal(row)
+	if marshalErr != nil {
+		return marshalErr
+	}
+	if err = s.db.Write(txnID, []byte(row[tableSchema.PrimaryKey]), payload); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (s *Server) updateRows(tableName string, tableSchema *schema.TableSchema, setMap, whereMap map[string]string) (int, error) {
+func (s *Server) updateRows(sess *connSession, tableName string, tableSchema *schema.TableSchema, setMap, whereMap map[string]string) (count int, err error) {
+	if _, updatesPrimaryKey := setMap[tableSchema.PrimaryKey]; updatesPrimaryKey {
+		return 0, fmt.Errorf("updating primary key %q is not supported", tableSchema.PrimaryKey)
+	}
+
 	rows, err := s.readRows(tableName, tableSchema)
 	if err != nil {
 		return 0, err
 	}
 
-	count := 0
+	txnID, started, err := s.beginMutationTxn(sess, tableName, tableSchema)
+	if err != nil {
+		return 0, err
+	}
+	if sess != nil && sess.inTransaction && sess.txnID == 0 {
+		sess.txnID = txnID
+		sess.txnTableName = tableName
+		sess.txnTableSchema = tableSchema
+	}
+	defer func() {
+		if err != nil {
+			if abortErr := s.db.Abort(txnID); abortErr != nil {
+				err = errors.Join(err, abortErr)
+			}
+			if sess != nil && sess.inTransaction {
+				sess.inTransaction = false
+				sess.txnID = 0
+				sess.txnTableName = ""
+				sess.txnTableSchema = nil
+			}
+			return
+		}
+
+		if started && (sess == nil || !sess.inTransaction) {
+			if commitErr := s.db.Commit(txnID); commitErr != nil {
+				if abortErr := s.db.Abort(txnID); abortErr != nil {
+					err = errors.Join(commitErr, abortErr)
+					return
+				}
+				err = commitErr
+			}
+		}
+	}()
+
 	for _, row := range rows {
 		if !rowMatches(row, whereMap) {
 			continue
@@ -697,34 +851,72 @@ func (s *Server) updateRows(tableName string, tableSchema *schema.TableSchema, s
 			}
 			row[col] = val
 		}
-		if err := s.writeRow(tableName, tableSchema, row); err != nil {
+		payload, marshalErr := json.Marshal(row)
+		if marshalErr != nil {
+			return 0, marshalErr
+		}
+		if err = s.db.Write(txnID, []byte(row[tableSchema.PrimaryKey]), payload); err != nil {
 			return 0, err
 		}
 		count++
 	}
+
 	return count, nil
 }
 
-func (s *Server) deleteRows(tableName string, tableSchema *schema.TableSchema, whereMap map[string]string) (int, error) {
+func (s *Server) deleteRows(sess *connSession, tableName string, tableSchema *schema.TableSchema, whereMap map[string]string) (count int, err error) {
 	rows, err := s.readRows(tableName, tableSchema)
 	if err != nil {
 		return 0, err
 	}
 
-	engine := s.db.TableStorageEngine(tableName)
-	if engine == nil {
-		return 0, fmt.Errorf("table %q not found", tableName)
+	txnID, started, err := s.beginMutationTxn(sess, tableName, tableSchema)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if err != nil {
+			if abortErr := s.db.Abort(txnID); abortErr != nil {
+				err = errors.Join(err, abortErr)
+			}
+			if sess != nil && sess.inTransaction {
+				sess.inTransaction = false
+				sess.txnID = 0
+				sess.txnTableName = ""
+				sess.txnTableSchema = nil
+			}
+			return
+		}
+
+		if started && (sess == nil || !sess.inTransaction) {
+			if commitErr := s.db.Commit(txnID); commitErr != nil {
+				if abortErr := s.db.Abort(txnID); abortErr != nil {
+					err = errors.Join(commitErr, abortErr)
+					return
+				}
+				err = commitErr
+			}
+		}
+	}()
+	if sess != nil && sess.inTransaction && sess.txnID == 0 {
+		sess.txnID = txnID
+		sess.txnTableName = tableName
+		sess.txnTableSchema = tableSchema
 	}
 
-	count := 0
 	for _, row := range rows {
 		if !rowMatches(row, whereMap) {
 			continue
 		}
-		if err := engine.Delete([]byte(row[tableSchema.PrimaryKey])); err != nil {
+		if err = s.db.Delete(txnID, []byte(row[tableSchema.PrimaryKey])); err != nil {
 			return 0, err
 		}
 		count++
+	}
+	if sess != nil && sess.inTransaction && sess.txnID == 0 {
+		sess.txnID = txnID
+		sess.txnTableName = tableName
+		sess.txnTableSchema = tableSchema
 	}
 	return count, nil
 }
@@ -741,21 +933,34 @@ func splitStatements(sqlText string) []string {
 	var buf strings.Builder
 	var inSingle, inDouble bool
 
-	for _, r := range sqlText {
-		switch r {
+	for i := 0; i < len(sqlText); i++ {
+		c := sqlText[i]
+		switch c {
 		case '\'':
 			if !inDouble {
+				buf.WriteByte(c)
+				if inSingle && i+1 < len(sqlText) && sqlText[i+1] == '\'' {
+					buf.WriteByte(sqlText[i+1])
+					i++
+					continue
+				}
 				inSingle = !inSingle
+				continue
 			}
-			buf.WriteRune(r)
 		case '"':
 			if !inSingle {
+				buf.WriteByte(c)
+				if inDouble && i+1 < len(sqlText) && sqlText[i+1] == '"' {
+					buf.WriteByte(sqlText[i+1])
+					i++
+					continue
+				}
 				inDouble = !inDouble
+				continue
 			}
-			buf.WriteRune(r)
 		case ';':
 			if inSingle || inDouble {
-				buf.WriteRune(r)
+				buf.WriteByte(c)
 				continue
 			}
 			part := strings.TrimSpace(buf.String())
@@ -763,9 +968,9 @@ func splitStatements(sqlText string) []string {
 				parts = append(parts, part)
 			}
 			buf.Reset()
-		default:
-			buf.WriteRune(r)
+			continue
 		}
+		buf.WriteByte(c)
 	}
 
 	if part := strings.TrimSpace(buf.String()); part != "" {
@@ -779,30 +984,42 @@ func splitTopLevel(s string, sep rune) []string {
 	var buf strings.Builder
 	depth := 0
 	var inSingle, inDouble bool
-	for _, r := range s {
-		switch r {
+	sepByte := byte(sep)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
 		case '\'':
 			if !inDouble {
+				buf.WriteByte(c)
+				if inSingle && i+1 < len(s) && s[i+1] == '\'' {
+					buf.WriteByte(s[i+1])
+					i++
+					continue
+				}
 				inSingle = !inSingle
+				continue
 			}
-			buf.WriteRune(r)
 		case '"':
 			if !inSingle {
+				buf.WriteByte(c)
+				if inDouble && i+1 < len(s) && s[i+1] == '"' {
+					buf.WriteByte(s[i+1])
+					i++
+					continue
+				}
 				inDouble = !inDouble
+				continue
 			}
-			buf.WriteRune(r)
 		case '(':
 			if !inSingle && !inDouble {
 				depth++
 			}
-			buf.WriteRune(r)
 		case ')':
 			if !inSingle && !inDouble && depth > 0 {
 				depth--
 			}
-			buf.WriteRune(r)
 		default:
-			if r == sep && !inSingle && !inDouble && depth == 0 {
+			if c == sepByte && !inSingle && !inDouble && depth == 0 {
 				part := strings.TrimSpace(buf.String())
 				if part != "" {
 					parts = append(parts, part)
@@ -810,8 +1027,8 @@ func splitTopLevel(s string, sep rune) []string {
 				buf.Reset()
 				continue
 			}
-			buf.WriteRune(r)
 		}
+		buf.WriteByte(c)
 	}
 	if part := strings.TrimSpace(buf.String()); part != "" {
 		parts = append(parts, part)
@@ -885,14 +1102,66 @@ func parseWhereClause(s string) (map[string]string, error) {
 }
 
 func splitOnAnd(s string) []string {
-	parts := reAnd.Split(s, -1)
-	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
+	var parts []string
+	var buf strings.Builder
+	var inSingle, inDouble bool
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case '\'':
+			if !inDouble {
+				buf.WriteByte(c)
+				if inSingle && i+1 < len(s) && s[i+1] == '\'' {
+					buf.WriteByte(s[i+1])
+					i++
+					continue
+				}
+				inSingle = !inSingle
+				continue
+			}
+		case '"':
+			if !inSingle {
+				buf.WriteByte(c)
+				if inDouble && i+1 < len(s) && s[i+1] == '"' {
+					buf.WriteByte(s[i+1])
+					i++
+					continue
+				}
+				inDouble = !inDouble
+				continue
+			}
+		}
+
+		if !inSingle && !inDouble && i+3 <= len(s) && strings.EqualFold(s[i:i+3], "AND") {
+			prevOK := i == 0 || isWhitespaceOrParen(s[i-1])
+			nextOK := i+3 == len(s) || isWhitespaceOrParen(s[i+3])
+			if prevOK && nextOK {
+				part := strings.TrimSpace(buf.String())
+				if part != "" {
+					parts = append(parts, part)
+				}
+				buf.Reset()
+				i += 2
+				continue
+			}
+		}
+
+		buf.WriteByte(c)
+	}
+	if part := strings.TrimSpace(buf.String()); part != "" {
+		parts = append(parts, part)
 	}
 	return parts
 }
 
-var reAnd = regexp.MustCompile(`(?i)\s+AND\s+`)
+func isWhitespaceOrParen(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', '\r', '(', ')':
+		return true
+	default:
+		return false
+	}
+}
 
 func rowMatches(row map[string]string, whereMap map[string]string) bool {
 	for col, val := range whereMap {
@@ -944,7 +1213,53 @@ func parseValueList(s string) ([]string, error) {
 
 func unescapeSQLString(s string) string {
 	s = strings.ReplaceAll(s, "''", "'")
+	s = strings.ReplaceAll(s, `""`, `"`)
 	return s
+}
+
+func compareRowValues(a, b string, dataType schema.DataType) int {
+	switch dataType {
+	case schema.DataTypeInt64:
+		if ai, err := strconv.ParseInt(strings.TrimSpace(a), 10, 64); err == nil {
+			if bi, err := strconv.ParseInt(strings.TrimSpace(b), 10, 64); err == nil {
+				switch {
+				case ai < bi:
+					return -1
+				case ai > bi:
+					return 1
+				default:
+					return 0
+				}
+			}
+		}
+	case schema.DataTypeFloat64:
+		if af, err := strconv.ParseFloat(strings.TrimSpace(a), 64); err == nil {
+			if bf, err := strconv.ParseFloat(strings.TrimSpace(b), 64); err == nil {
+				switch {
+				case af < bf:
+					return -1
+				case af > bf:
+					return 1
+				default:
+					return 0
+				}
+			}
+		}
+	case schema.DataTypeBool:
+		if ab, err := strconv.ParseBool(strings.TrimSpace(a)); err == nil {
+			if bb, err := strconv.ParseBool(strings.TrimSpace(b)); err == nil {
+				switch {
+				case !ab && bb:
+					return -1
+				case ab && !bb:
+					return 1
+				default:
+					return 0
+				}
+			}
+		}
+	}
+	return strings.Compare(a, b)
 }
 
 func normalizeIdent(s string) string {

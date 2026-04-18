@@ -1,32 +1,48 @@
 {
-  "sstable_id": 163,
+  "sstable_id": 203,
   "sstables": [
     {
-      "id": 161,
+      "id": 199,
       "level": 0
     },
     {
-      "id": 162,
+      "id": 200,
       "level": 0
     },
     {
-      "id": 156,
+      "id": 201,
+      "level": 0
+    },
+    {
+      "id": 202,
+      "level": 0
+    },
+    {
+      "id": 192,
       "level": 1
     },
     {
-      "id": 157,
+      "id": 193,
       "level": 1
     },
     {
-      "id": 158,
+      "id": 194,
       "level": 1
     },
     {
-      "id": 159,
+      "id": 195,
       "level": 1
     },
     {
-      "id": 160,
+      "id": 196,
+      "level": 1
+    },
+    {
+      "id": 197,
+      "level": 1
+    },
+    {
+      "id": 198,
       "level": 1
     }
   ]

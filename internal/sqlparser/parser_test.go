@@ -1,6 +1,10 @@
 package sqlparser
 
-import "testing"
+import (
+	"testing"
+
+	vitesssqlparser "github.com/xwb1989/sqlparser"
+)
 
 func TestParseSelectTables(t *testing.T) {
 	stmt, err := Parse("SELECT t.name, u.email FROM tests t, users u WHERE t.id = u.test_id;")
@@ -8,25 +12,24 @@ func TestParseSelectTables(t *testing.T) {
 		t.Fatalf("Parse() error = %v", err)
 	}
 
-	selectStmt, ok := stmt.(*SelectStatement)
+	selectStmt, ok := stmt.(*vitesssqlparser.Select)
 	if !ok {
-		t.Fatalf("expected *SelectStatement, got %T", stmt)
+		t.Fatalf("expected *sqlparser.Select, got %T", stmt)
 	}
 
-	if selectStmt.Kind() != StatementSelect {
-		t.Fatalf("unexpected kind: %s", selectStmt.Kind())
+	if len(selectStmt.SelectExprs) != 2 {
+		t.Fatalf("expected 2 select expressions, got %d", len(selectStmt.SelectExprs))
 	}
 
-	tables := selectStmt.Tables()
+	tables, err := ExtractTables("SELECT t.name, u.email FROM tests t, users u WHERE t.id = u.test_id;")
+	if err != nil {
+		t.Fatalf("ExtractTables() error = %v", err)
+	}
 	if len(tables) != 2 {
 		t.Fatalf("expected 2 tables, got %d (%v)", len(tables), tables)
 	}
 	if tables[0] != "tests" || tables[1] != "users" {
 		t.Fatalf("unexpected tables: %v", tables)
-	}
-
-	if len(selectStmt.Columns) != 2 {
-		t.Fatalf("expected 2 columns, got %d", len(selectStmt.Columns))
 	}
 }
 
@@ -36,15 +39,17 @@ func TestParseCreateIndex(t *testing.T) {
 		t.Fatalf("Parse() error = %v", err)
 	}
 
-	idxStmt, ok := stmt.(*CreateIndexStatement)
+	ddlStmt, ok := stmt.(*vitesssqlparser.DDL)
 	if !ok {
-		t.Fatalf("expected *CreateIndexStatement, got %T", stmt)
+		t.Fatalf("expected *sqlparser.DDL, got %T", stmt)
 	}
+	_ = ddlStmt
 
-	if idxStmt.Index != "email_idx" {
-		t.Fatalf("expected index email_idx, got %s", idxStmt.Index)
+	tables, err := ExtractTables("CREATE INDEX email_idx ON users (email)")
+	if err != nil {
+		t.Fatalf("ExtractTables() error = %v", err)
 	}
-	if idxStmt.Table != "users" {
-		t.Fatalf("expected table users, got %s", idxStmt.Table)
+	if len(tables) != 1 || tables[0] != "users" {
+		t.Fatalf("expected users table extraction, got %v", tables)
 	}
 }

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/rodrigo0345/omag/internal/txn"
 	"github.com/rodrigo0345/omag/internal/txn/isolation"
 	"github.com/rodrigo0345/omag/internal/txn/log"
+	"github.com/rodrigo0345/omag/internal/txn/recovery"
 	"github.com/rodrigo0345/omag/internal/txn/rollback"
 	"github.com/rodrigo0345/omag/internal/txn/write_handler"
 )
@@ -124,6 +126,24 @@ func OpenMVCCLSM(opts Options) (_ *Engine, err error) {
 			}
 		}
 	}
+
+	recoveryCoordinator := recovery.NewDefaultRecoveryCoordinator(
+		walMgr,
+		storageEngine,
+		func(tableName string) storage.IStorageEngine {
+			if tableName == "" {
+				return storageEngine
+			}
+			return engine.tableStorageEngine(tableName)
+		},
+		bufferPool,
+		rollbackMgr,
+	)
+	recoveryState, err := recoveryCoordinator.RecoverFromCrash(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("startup recovery failed: %w", err)
+	}
+	isolationMgr.EnsureMinNextTxnID(recoveryState.MaxTxnID)
 
 	writeHandler.SetStorageResolver(func(tableName string) storage.IStorageEngine {
 		if tableName == "" {

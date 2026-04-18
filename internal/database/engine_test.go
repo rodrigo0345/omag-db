@@ -272,3 +272,105 @@ func TestEngineUsesSeparateTableBackends(t *testing.T) {
 	}
 }
 
+func TestOpenMVCCLSM_ReplaysCommittedTransactionsOnStartup(t *testing.T) {
+	tmp := t.TempDir()
+	opts := Options{
+		DBPath:           filepath.Join(tmp, "db.db"),
+		LSMDataDir:       filepath.Join(tmp, "lsm"),
+		WALPath:          filepath.Join(tmp, "wal.log"),
+		BufferPoolSize:   8,
+		ReplacerCapacity: 4,
+	}
+
+	firstEngine, err := OpenMVCCLSM(opts)
+	if err != nil {
+		t.Fatalf("OpenMVCCLSM() first open error = %v", err)
+	}
+
+	users := schema.NewTableSchema("users", "id")
+	if err := users.AddColumn("id", schema.DataTypeString, false); err != nil {
+		t.Fatalf("AddColumn(users.id) error = %v", err)
+	}
+	if err := users.AddColumn("name", schema.DataTypeString, false); err != nil {
+		t.Fatalf("AddColumn(users.name) error = %v", err)
+	}
+	if err := firstEngine.CreateTable(users); err != nil {
+		t.Fatalf("CreateTable(users) error = %v", err)
+	}
+
+	txnID := firstEngine.BeginTransaction(txn_unit.SERIALIZABLE, "users", users)
+	if err := firstEngine.Write(txnID, []byte("user-1"), []byte(`{"id":"user-1","name":"Grace"}`)); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := firstEngine.Commit(txnID); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	if err := firstEngine.Close(); err != nil {
+		t.Fatalf("Close() first engine error = %v", err)
+	}
+
+	secondEngine, err := OpenMVCCLSM(opts)
+	if err != nil {
+		t.Fatalf("OpenMVCCLSM() second open error = %v", err)
+	}
+	defer func() { _ = secondEngine.Close() }()
+
+	if secondEngine.TableStorageEngine("users") == nil {
+		t.Fatal("expected users table storage engine after restart")
+	}
+
+	readTxn := secondEngine.BeginTransaction(txn_unit.READ_COMMITTED, "users", users)
+	value, err := secondEngine.Read(readTxn, []byte("user-1"))
+	if err != nil {
+		t.Fatalf("Read() after restart error = %v", err)
+	}
+	if string(value) != `{"id":"user-1","name":"Grace"}` {
+		t.Fatalf("Read() after restart = %s, want recovered value", string(value))
+	}
+	if err := secondEngine.Commit(readTxn); err != nil {
+		t.Fatalf("Commit(readTxn) error = %v", err)
+	}
+}
+
+func TestOpenMVCCLSM_SeedsTxnIDFromRecovery(t *testing.T) {
+	tmp := t.TempDir()
+	opts := Options{
+		DBPath:           filepath.Join(tmp, "db.db"),
+		LSMDataDir:       filepath.Join(tmp, "lsm"),
+		WALPath:          filepath.Join(tmp, "wal.log"),
+		BufferPoolSize:   8,
+		ReplacerCapacity: 4,
+	}
+
+	firstEngine, err := OpenMVCCLSM(opts)
+	if err != nil {
+		t.Fatalf("OpenMVCCLSM() first open error = %v", err)
+	}
+
+	var lastTxnID int64
+	for i := 0; i < 6; i++ {
+		lastTxnID = firstEngine.BeginTransaction(txn_unit.READ_COMMITTED, "", nil)
+		if err := firstEngine.Commit(lastTxnID); err != nil {
+			t.Fatalf("Commit(%d) error = %v", lastTxnID, err)
+		}
+	}
+
+	if err := firstEngine.Close(); err != nil {
+		t.Fatalf("Close() first engine error = %v", err)
+	}
+
+	secondEngine, err := OpenMVCCLSM(opts)
+	if err != nil {
+		t.Fatalf("OpenMVCCLSM() second open error = %v", err)
+	}
+	defer func() { _ = secondEngine.Close() }()
+
+	nextTxnID := secondEngine.BeginTransaction(txn_unit.READ_COMMITTED, "", nil)
+	if nextTxnID <= lastTxnID {
+		t.Fatalf("BeginTransaction() after restart = %d, want > %d", nextTxnID, lastTxnID)
+	}
+	if err := secondEngine.Commit(nextTxnID); err != nil {
+		t.Fatalf("Commit(%d) after restart error = %v", nextTxnID, err)
+	}
+}
+
