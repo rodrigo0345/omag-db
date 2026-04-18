@@ -143,7 +143,7 @@ func (rv *RecoveryValidator) validateTransactionConsistency(state *wallog.Recove
 }
 
 func (rv *RecoveryValidator) validateStorageEngineState(state *wallog.RecoveryState, result *ValidationResult) error {
-	entries, err := rv.storageEngine.Scan()
+	entries, err := rv.storageEngine.Scan(nil, nil)
 	if err != nil {
 		return fmt.Errorf("storage engine scan failed: %w", err)
 	}
@@ -151,7 +151,6 @@ func (rv *RecoveryValidator) validateStorageEngineState(state *wallog.RecoverySt
 	log.Printf("[RecoveryValidator] Storage engine scan successful: %d entries", len(entries))
 
 	result.Details["storageEngineEntries"] = len(entries)
-
 
 	return nil
 }

@@ -38,7 +38,7 @@ func (m *MockLogManager) GetLastCheckpointLSN() uint64 {
 	return 0
 }
 
-func (m *MockLogManager) AddTransactionOperation(txnID uint64, opType log.RecordType, key []byte, value []byte) {
+func (m *MockLogManager) AddTransactionOperation(txnID uint64, tableName string, opType log.RecordType, key []byte, value []byte) {
 
 }
 

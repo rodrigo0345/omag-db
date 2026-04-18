@@ -10,6 +10,7 @@ type WALRecord struct {
 	LSN     uint64
 	PrevLSN uint64
 	TxnID   uint64
+	TableName string
 	Type    RecordType
 	PageID  page.ResourcePageID
 	Offset  uint16
@@ -18,11 +19,12 @@ type WALRecord struct {
 	After   []byte
 }
 
-func NewWALRecord(lsn, prevLSN, txnID uint64, recordType RecordType, pageID page.ResourcePageID, offset uint16, pageLSN uint64, before, after []byte) WALRecord {
+func NewWALRecord(lsn, prevLSN, txnID uint64, tableName string, recordType RecordType, pageID page.ResourcePageID, offset uint16, pageLSN uint64, before, after []byte) WALRecord {
 	return WALRecord{
 		LSN:     lsn,
 		PrevLSN: prevLSN,
 		TxnID:   txnID,
+		TableName: tableName,
 		Type:    recordType,
 		PageID:  pageID,
 		Offset:  offset,
@@ -33,8 +35,8 @@ func NewWALRecord(lsn, prevLSN, txnID uint64, recordType RecordType, pageID page
 }
 
 func (rec WALRecord) String() string {
-	return fmt.Sprintf("WALRecord{LSN: %d, PrevLSN: %d, TxnID: %d, Type: %v, PageID: %d, Offset: %d, PageLSN: %d, Before: %v, After: %v}",
-		rec.LSN, rec.PrevLSN, rec.TxnID, rec.Type, rec.PageID, rec.Offset, rec.PageLSN, rec.Before, rec.After)
+	return fmt.Sprintf("WALRecord{LSN: %d, PrevLSN: %d, TxnID: %d, TableName: %q, Type: %v, PageID: %d, Offset: %d, PageLSN: %d, Before: %v, After: %v}",
+		rec.LSN, rec.PrevLSN, rec.TxnID, rec.TableName, rec.Type, rec.PageID, rec.Offset, rec.PageLSN, rec.Before, rec.After)
 }
 
 func (rec WALRecord) GetLSN() uint64 {

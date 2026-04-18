@@ -13,6 +13,7 @@ import (
 
 type DefaultWriteHandler struct {
 	storageEngine   storage.IStorageEngine
+	storageResolver func(tableName string) storage.IStorageEngine
 	rollbackManager *rollback.RollbackManager
 	logManager      log.ILogManager
 	bufferManager   buffer.IBufferPoolManager
@@ -34,17 +35,34 @@ func NewDefaultWriteHandler(
 	}
 }
 
+func (dh *DefaultWriteHandler) SetStorageResolver(resolver func(tableName string) storage.IStorageEngine) {
+	dh.storageResolver = resolver
+}
+
+func (dh *DefaultWriteHandler) resolveStorageEngine(tableName string) storage.IStorageEngine {
+	if dh.storageResolver != nil {
+		if engine := dh.storageResolver(tableName); engine != nil {
+			return engine
+		}
+	}
+	return dh.storageEngine
+}
+
 func (dh *DefaultWriteHandler) HandleWrite(txn *txn_unit.Transaction, writeOp WriteOperation) error {
 	var beforeImage []byte
 	var err error
+	storageEngine := dh.resolveStorageEngine(writeOp.TableName)
+	if storageEngine == nil {
+		return fmt.Errorf("storage engine is nil")
+	}
 
 	if !writeOp.IsDelete {
-		beforeImage, err = dh.storageEngine.Get(writeOp.Key)
+		beforeImage, err = storageEngine.Get(writeOp.Key)
 		if err != nil {
 			beforeImage = nil
 		}
 	} else {
-		beforeImage, err = dh.storageEngine.Get(writeOp.Key)
+		beforeImage, err = storageEngine.Get(writeOp.Key)
 		if err != nil {
 			return fmt.Errorf("failed to get value before delete: %w", err)
 		}
@@ -84,22 +102,22 @@ func (dh *DefaultWriteHandler) HandleWrite(txn *txn_unit.Transaction, writeOp Wr
 	}
 
 	if writeOp.IsDelete {
-		if err := dh.storageEngine.Delete(writeOp.Key); err != nil {
+		if err := storageEngine.Delete(writeOp.Key); err != nil {
 			return fmt.Errorf("storage delete failed: %w", err)
 		}
 		// Record deletion operation for crash recovery
-		txn.RecordRecoveryOperation(log.DELETE, writeOp.Key, nil)
+		txn.RecordRecoveryOperation(writeOp.TableName, log.DELETE, writeOp.Key, nil)
 		if dh.logManager != nil {
-			dh.logManager.AddTransactionOperation(txn.GetID(), log.DELETE, writeOp.Key, nil)
+			dh.logManager.AddTransactionOperation(txn.GetID(), writeOp.TableName, log.DELETE, writeOp.Key, nil)
 		}
 	} else {
-		if err := dh.storageEngine.Put(writeOp.Key, writeOp.Value); err != nil {
+		if err := storageEngine.Put(writeOp.Key, writeOp.Value); err != nil {
 			return fmt.Errorf("storage put failed: %w", err)
 		}
 		// Record put operation for crash recovery
-		txn.RecordRecoveryOperation(log.PUT, writeOp.Key, writeOp.Value)
+		txn.RecordRecoveryOperation(writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
 		if dh.logManager != nil {
-			dh.logManager.AddTransactionOperation(txn.GetID(), log.PUT, writeOp.Key, writeOp.Value)
+			dh.logManager.AddTransactionOperation(txn.GetID(), writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
 		}
 
 		if dh.indexManager != nil && dh.tableSchema != nil {

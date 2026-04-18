@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/rodrigo0345/omag/internal/database"
+	"github.com/rodrigo0345/omag/internal/pgserver"
+	applog "github.com/rodrigo0345/omag/pkg/log"
 )
 
 const (
@@ -15,35 +17,41 @@ const (
 )
 
 func main() {
-	mode := flag.String("mode", "cli", "cli or server")
+	listenAddr := flag.String("listen", ":5432", "TCP address to listen on for psql connections")
+	dbPath := flag.String("db", defaultDBPath, "path to the database file")
+	lsmDataDir := flag.String("lsm-data-dir", defaultLSMDataDir, "directory for LSM table data")
+	walPath := flag.String("wal", defaultWALPath, "path to the WAL file")
+	debug := flag.Bool("debug", false, "enable debug logs for pgwire server and engine")
 	flag.Parse()
 
+	if *debug {
+		applog.SetLevel(applog.LevelDebug)
+	}
+
+	applog.Info("[PGSERVER] starting OMAG pgwire server listen=%s db=%s lsm=%s wal=%s debug=%v", *listenAddr, *dbPath, *lsmDataDir, *walPath, *debug)
+
 	engine, err := database.OpenMVCCLSM(database.Options{
-		DBPath:     defaultDBPath,
-		LSMDataDir: defaultLSMDataDir,
-		WALPath:    defaultWALPath,
+		DBPath:     *dbPath,
+		LSMDataDir: *lsmDataDir,
+		WALPath:    *walPath,
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "failed to open database:", err)
+		if _, writeErr := fmt.Fprintln(os.Stderr, "failed to open database:", err); writeErr != nil {
+			_ = writeErr
+		}
 		os.Exit(1)
 	}
-	defer engine.Close()
+	defer func() {
+		if closeErr := engine.Close(); closeErr != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "close error:", closeErr)
+		}
+	}()
 
-	switch *mode {
-	case "cli":
-		shell := &sqlShellNew{db: engine}
-		if err := shell.Run(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+	srv := pgserver.New(engine)
+	if err := srv.ListenAndServe(*listenAddr); err != nil {
+		if _, writeErr := fmt.Fprintln(os.Stderr, "server error:", err); writeErr != nil {
+			_ = writeErr
 		}
-	case "server":
-		srv := NewPostgresServer(engine)
-		if err := srv.ListenAndServe(":5432"); err != nil {
-			fmt.Fprintln(os.Stderr, "server error:", err)
-			os.Exit(1)
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "unknown mode: %s\n", *mode)
 		os.Exit(1)
 	}
 }

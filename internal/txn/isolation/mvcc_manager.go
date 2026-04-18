@@ -22,6 +22,7 @@ type MVCCManager struct {
 	writeHandler    write_handler.IWriteHandler
 	rollbackManager *rollback.RollbackManager
 	primaryIndex    storage.IStorageEngine
+	storageResolver func(tableName string) storage.IStorageEngine
 	indexManagers   map[string]*schema.SecondaryIndexManager
 	nextTxnID       atomic.Int64
 	indexSnapshots  map[TransactionID]map[string]string
@@ -45,6 +46,21 @@ func NewMVCCManager(
 		indexManagers:   indexManagers,
 		indexSnapshots:  make(map[TransactionID]map[string]string),
 	}
+}
+
+func (m *MVCCManager) SetStorageResolver(resolver func(tableName string) storage.IStorageEngine) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.storageResolver = resolver
+}
+
+func (m *MVCCManager) resolveStorageEngine(tableName string) storage.IStorageEngine {
+	if m.storageResolver != nil {
+		if engine := m.storageResolver(tableName); engine != nil {
+			return engine
+		}
+	}
+	return m.primaryIndex
 }
 
 func (m *MVCCManager) BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64 {
@@ -73,7 +89,12 @@ func (m *MVCCManager) Read(txnID int64, Key []byte) ([]byte, error) {
 
 	_ = transaction
 	transaction.RecordReadKey(Key)
-	return m.primaryIndex.Get(Key)
+	tableName, _ := transaction.GetTableContext()
+	storageEngine := m.resolveStorageEngine(tableName)
+	if storageEngine == nil {
+		return nil, fmt.Errorf("storage engine is nil")
+	}
+	return storageEngine.Get(Key)
 }
 
 func (m *MVCCManager) Write(txnID int64, Key []byte, Value []byte) error {
@@ -172,7 +193,9 @@ func (m *MVCCManager) Commit(txnID int64) error {
 		if err != nil {
 			return err
 		}
-		m.logManager.Flush(lsn)
+		if err := m.logManager.Flush(lsn); err != nil {
+			return err
+		}
 	}
 
 	m.mu.Lock()
@@ -213,7 +236,7 @@ func (m *MVCCManager) captureIndexSnapshot(tableName string) map[string]string {
 	}
 
 	for _, indexName := range indexMgr.GetAllIndexNames() {
-		stats, err := indexMgr.GetIndexStats(indexName)
+		stats, err := indexMgr.GetIndexStats(tableName, indexName)
 		if err == nil && stats != nil {
 			snapshot[indexName] = fmt.Sprintf("idx:%s:%d", indexName, stats.NumEntries)
 		} else {

@@ -361,35 +361,71 @@ func (b *BPlusTreeBackend) Delete(key []byte) error {
 	return nil
 }
 
-func (b *BPlusTreeBackend) Scan() ([]storage.ScanEntry, error) {
+func (b *BPlusTreeBackend) Scan(lower []byte, upper []byte) ([]storage.ScanEntry, error) {
 	var results []storage.ScanEntry
+
+	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) > 0 {
+		return nil, fmt.Errorf("lower bound %q is greater than upper bound %q", lower, upper)
+	}
 
 	rootID := b.meta.RootPage()
 	if rootID == 0 {
 		return results, nil
 	}
 
-	rootPage, err := b.bufferManager.PinPage(page.ResourcePageID(rootID))
+	path, err := b.findLeafPage(rootID, []byte{})
 	if err != nil {
 		return nil, err
 	}
-	defer b.bufferManager.UnpinPage(page.ResourcePageID(rootID), false)
-
-	rootPage.RLock()
-	leaf := &LeafLogicPage{data: rootPage.GetData()}
-	cellCount := leaf.CellCount()
-
-	for i := uint16(0); i < cellCount; i++ {
-		offset := leaf.GetCellOffset(i)
-		cell := leaf.GetCell(offset)
-		if len(cell.Value) > 0 {
-			results = append(results, storage.ScanEntry{
-				Key:   cell.Key,
-				Value: cell.Value,
-			})
-		}
+	if len(path) == 0 {
+		return results, nil
 	}
-	rootPage.RUnlock()
+
+	hasLower := len(lower) > 0
+	hasUpper := len(upper) > 0
+	lowerBound := string(lower)
+	upperBound := string(upper)
+	leafID := path[len(path)-1]
+
+	for leafID != 0 {
+		leafPage, err := b.bufferManager.PinPage(page.ResourcePageID(leafID))
+		if err != nil {
+			return nil, err
+		}
+
+		leafPage.RLock()
+		leaf := &LeafLogicPage{data: leafPage.GetData()}
+		cellCount := leaf.CellCount()
+		rightSibling := leaf.RightSibling()
+		stop := false
+
+		for i := uint16(0); i < cellCount; i++ {
+			cell := leaf.GetCell(leaf.GetCellOffset(i))
+			key := string(cell.Key)
+
+			if hasUpper && key > upperBound {
+				stop = true
+				break
+			}
+			if hasLower && key < lowerBound {
+				continue
+			}
+
+			keyCopy := append([]byte(nil), cell.Key...)
+			valueCopy := append([]byte(nil), cell.Value...)
+			results = append(results, storage.ScanEntry{Key: keyCopy, Value: valueCopy})
+		}
+
+		leafPage.RUnlock()
+		if err := b.bufferManager.UnpinPage(page.ResourcePageID(leafID), false); err != nil {
+			return nil, err
+		}
+
+		if stop {
+			break
+		}
+		leafID = rightSibling
+	}
 
 	return results, nil
 }

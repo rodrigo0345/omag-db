@@ -49,7 +49,7 @@ func TestEngineCreateTableAndTxnRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenMVCCLSM() error = %v", err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ts := schema.NewTableSchema("users", "id")
 	if err := ts.AddColumn("id", schema.DataTypeString, false); err != nil {
@@ -83,3 +83,192 @@ func TestEngineCreateTableAndTxnRoundTrip(t *testing.T) {
 		t.Fatalf("Commit() error = %v", err)
 	}
 }
+
+func TestEngineScanUsesLSMBackend(t *testing.T) {
+	tmp := t.TempDir()
+
+	engine, err := OpenMVCCLSM(Options{
+		DBPath:           filepath.Join(tmp, "db.db"),
+		LSMDataDir:       filepath.Join(tmp, "lsm"),
+		WALPath:          filepath.Join(tmp, "wal.log"),
+		BufferPoolSize:   8,
+		ReplacerCapacity: 4,
+	})
+	if err != nil {
+		t.Fatalf("OpenMVCCLSM() error = %v", err)
+	}
+	defer func() { _ = engine.Close() }()
+
+	ts := schema.NewTableSchema("users", "id")
+	if err := ts.AddColumn("id", schema.DataTypeString, false); err != nil {
+		t.Fatalf("AddColumn() error = %v", err)
+	}
+	if err := ts.AddColumn("name", schema.DataTypeString, false); err != nil {
+		t.Fatalf("AddColumn() error = %v", err)
+	}
+	if err := engine.CreateTable(ts); err != nil {
+		t.Fatalf("CreateTable() error = %v", err)
+	}
+
+	insertTxn := engine.BeginTransaction(txn_unit.SERIALIZABLE, "users", ts)
+	for _, kv := range []struct {
+		key   string
+		value string
+	}{
+		{key: "alpha", value: `{"id":"alpha","name":"Ada"}`},
+		{key: "bravo", value: `{"id":"bravo","name":"Bea"}`},
+		{key: "charlie", value: `{"id":"charlie","name":"Cid"}`},
+	} {
+		if err := engine.Write(insertTxn, []byte(kv.key), []byte(kv.value)); err != nil {
+			t.Fatalf("Write(%s) error = %v", kv.key, err)
+		}
+	}
+	if err := engine.Commit(insertTxn); err != nil {
+		t.Fatalf("Commit(insertTxn) error = %v", err)
+	}
+
+	updateTxn := engine.BeginTransaction(txn_unit.SERIALIZABLE, "users", ts)
+	if err := engine.Write(updateTxn, []byte("bravo"), []byte(`{"id":"bravo","name":"Bea-Updated"}`)); err != nil {
+		t.Fatalf("Write(update bravo) error = %v", err)
+	}
+	if err := engine.Delete(updateTxn, []byte("alpha")); err != nil {
+		t.Fatalf("Delete(alpha) error = %v", err)
+	}
+	if err := engine.Commit(updateTxn); err != nil {
+		t.Fatalf("Commit(updateTxn) error = %v", err)
+	}
+
+	entries, err := engine.Scan([]byte("a"), []byte("z"))
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+
+	got := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		got[string(entry.Key)] = string(entry.Value)
+	}
+
+	want := map[string]string{
+		"bravo":   `{"id":"bravo","name":"Bea-Updated"}`,
+		"charlie": `{"id":"charlie","name":"Cid"}`,
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("Scan() entry count = %d, want %d", len(got), len(want))
+	}
+	for key, wantValue := range want {
+		if got[key] != wantValue {
+			t.Fatalf("Scan() key %q = %q, want %q", key, got[key], wantValue)
+		}
+	}
+	if _, exists := got["alpha"]; exists {
+		t.Fatalf("Scan() unexpectedly returned deleted key alpha")
+	}
+}
+
+func TestEngineUsesSeparateTableBackends(t *testing.T) {
+	tmp := t.TempDir()
+
+	engine, err := OpenMVCCLSM(Options{
+		DBPath:           filepath.Join(tmp, "db.db"),
+		LSMDataDir:       filepath.Join(tmp, "lsm"),
+		WALPath:          filepath.Join(tmp, "wal.log"),
+		BufferPoolSize:   8,
+		ReplacerCapacity: 4,
+	})
+	if err != nil {
+		t.Fatalf("OpenMVCCLSM() error = %v", err)
+	}
+	defer func() { _ = engine.Close() }()
+
+	users := schema.NewTableSchema("users", "id")
+	if err := users.AddColumn("id", schema.DataTypeString, false); err != nil {
+		t.Fatalf("AddColumn(users.id) error = %v", err)
+	}
+	if err := users.AddColumn("name", schema.DataTypeString, false); err != nil {
+		t.Fatalf("AddColumn(users.name) error = %v", err)
+	}
+
+	orders := schema.NewTableSchema("orders", "id")
+	if err := orders.AddColumn("id", schema.DataTypeString, false); err != nil {
+		t.Fatalf("AddColumn(orders.id) error = %v", err)
+	}
+	if err := orders.AddColumn("status", schema.DataTypeString, false); err != nil {
+		t.Fatalf("AddColumn(orders.status) error = %v", err)
+	}
+
+	if err := engine.CreateTable(users); err != nil {
+		t.Fatalf("CreateTable(users) error = %v", err)
+	}
+	if err := engine.CreateTable(orders); err != nil {
+		t.Fatalf("CreateTable(orders) error = %v", err)
+	}
+	if engine.TableStorageEngine("users") == nil || engine.TableStorageEngine("orders") == nil {
+		t.Fatal("expected table-specific storage engines")
+	}
+	if engine.TableStorageEngine("users") == engine.TableStorageEngine("orders") {
+		t.Fatal("expected distinct storage engines per table")
+	}
+
+	userTxn := engine.BeginTransaction(txn_unit.SERIALIZABLE, "users", users)
+	if err := engine.Write(userTxn, []byte("shared-key"), []byte(`{"id":"shared-key","name":"Ada"}`)); err != nil {
+		t.Fatalf("Write(users) error = %v", err)
+	}
+	if err := engine.Commit(userTxn); err != nil {
+		t.Fatalf("Commit(users) error = %v", err)
+	}
+
+	orderTxn := engine.BeginTransaction(txn_unit.SERIALIZABLE, "orders", orders)
+	if err := engine.Write(orderTxn, []byte("shared-key"), []byte(`{"id":"shared-key","status":"Pending"}`)); err != nil {
+		t.Fatalf("Write(orders) error = %v", err)
+	}
+	if err := engine.Commit(orderTxn); err != nil {
+		t.Fatalf("Commit(orders) error = %v", err)
+	}
+
+	readUserTxn := engine.BeginTransaction(txn_unit.READ_COMMITTED, "users", users)
+	userValue, err := engine.Read(readUserTxn, []byte("shared-key"))
+	if err != nil {
+		t.Fatalf("Read(users) error = %v", err)
+	}
+	if string(userValue) != `{"id":"shared-key","name":"Ada"}` {
+		t.Fatalf("Read(users) = %s, want users value", string(userValue))
+	}
+	if err := engine.Commit(readUserTxn); err != nil {
+		t.Fatalf("Commit(readUsers) error = %v", err)
+	}
+
+	readOrderTxn := engine.BeginTransaction(txn_unit.READ_COMMITTED, "orders", orders)
+	orderValue, err := engine.Read(readOrderTxn, []byte("shared-key"))
+	if err != nil {
+		t.Fatalf("Read(orders) error = %v", err)
+	}
+	if string(orderValue) != `{"id":"shared-key","status":"Pending"}` {
+		t.Fatalf("Read(orders) = %s, want orders value", string(orderValue))
+	}
+	if err := engine.Commit(readOrderTxn); err != nil {
+		t.Fatalf("Commit(readOrders) error = %v", err)
+	}
+
+	entries, err := engine.Scan(nil, nil)
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("Scan() entry count = %d, want 2", len(entries))
+	}
+
+	var sawUser, sawOrder bool
+	for _, entry := range entries {
+		switch string(entry.Value) {
+		case `{"id":"shared-key","name":"Ada"}`:
+			sawUser = true
+		case `{"id":"shared-key","status":"Pending"}`:
+			sawOrder = true
+		}
+	}
+	if !sawUser || !sawOrder {
+		t.Fatalf("Scan() did not return both table values: sawUser=%v sawOrder=%v", sawUser, sawOrder)
+	}
+}
+

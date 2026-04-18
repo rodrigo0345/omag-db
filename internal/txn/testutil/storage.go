@@ -45,11 +45,17 @@ func (s *InMemoryStorageEngine) Delete(key []byte) error {
 	return nil
 }
 
-func (s *InMemoryStorageEngine) Scan() ([]storage.ScanEntry, error) {
+func (s *InMemoryStorageEngine) Scan(lower []byte, upper []byte) ([]storage.ScanEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]storage.ScanEntry, 0, len(s.data))
 	for key, value := range s.data {
+		if len(lower) > 0 && key < string(lower) {
+			continue
+		}
+		if len(upper) > 0 && key > string(upper) {
+			continue
+		}
 		result = append(result, storage.ScanEntry{
 			Key:   []byte(key),
 			Value: value,

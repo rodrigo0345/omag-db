@@ -36,10 +36,11 @@ type CheckpointMetadata struct {
 
 // RecoveryOperation represents a high-level database operation for recovery
 type RecoveryOperation struct {
-	TxnID uint64
-	Type  RecordType
-	Key   []byte
-	Value []byte
+	TxnID     uint64
+	TableName string
+	Type      RecordType
+	Key       []byte
+	Value     []byte
 }
 
 type RecoveryState struct {
@@ -128,6 +129,31 @@ func (wm *WALManager) appendWALRecord(v *WALRecord) (LSN, error) {
 		}
 
 	case CHECKPOINT:
+		// no-op
+
+	case OPERATION:
+		if len(v.Before) >= 3 {
+			opType := RecordType(v.Before[0])
+			tableNameLen := int(binary.LittleEndian.Uint16(v.Before[1:3]))
+			if len(v.Before) >= 3+tableNameLen {
+				tableName := string(v.Before[3 : 3+tableNameLen])
+				key := v.Before[3+tableNameLen:]
+				value := v.After
+
+				if _, exists := wm.txnOperations[v.TxnID]; !exists {
+					wm.txnOperations[v.TxnID] = make([]RecoveryOperation, 0)
+				}
+
+				op := RecoveryOperation{
+					TxnID:     v.TxnID,
+					TableName: tableName,
+					Type:      opType,
+					Key:       key,
+					Value:     value,
+				}
+				wm.txnOperations[v.TxnID] = append(wm.txnOperations[v.TxnID], op)
+			}
+		}
 	}
 
 	buf := wm.serializeWALRecord(*v)
@@ -138,16 +164,6 @@ func (wm *WALManager) appendWALRecord(v *WALRecord) (LSN, error) {
 	return LSN(wm.lsn), nil
 }
 
-func (wm *WALManager) AppendLog(rec interface{}) (LSN, error) {
-	switch v := rec.(type) {
-	case *WALRecord:
-		return wm.appendWALRecord(v)
-	case WALRecord:
-		return wm.appendWALRecord(&v)
-	default:
-		return 0, fmt.Errorf("unsupported log record type: %T", rec)
-	}
-}
 
 func (wm *WALManager) serializeWALRecord(rec WALRecord) []byte {
 	buf := make([]byte, 0, 256)
@@ -307,23 +323,28 @@ func (wm *WALManager) analysisPhase(file *os.File, state *RecoveryState) error {
 
 		case OPERATION:
 			// Reconstruct operation from WAL record
-			// Before = operation type byte + key
-			if len(rec.Before) > 0 {
+			// Before = operation type byte + table name length + table name + key
+			if len(rec.Before) > 3 {
 				opType := RecordType(rec.Before[0])
-				key := rec.Before[1:]
-				value := rec.After
+				tableNameLen := int(binary.LittleEndian.Uint16(rec.Before[1:3]))
+				if len(rec.Before) >= 3+tableNameLen {
+					tableName := string(rec.Before[3 : 3+tableNameLen])
+					key := rec.Before[3+tableNameLen:]
+					value := rec.After
 
-				if _, exists := wm.txnOperations[rec.TxnID]; !exists {
-					wm.txnOperations[rec.TxnID] = make([]RecoveryOperation, 0)
-				}
+					if _, exists := wm.txnOperations[rec.TxnID]; !exists {
+						wm.txnOperations[rec.TxnID] = make([]RecoveryOperation, 0)
+					}
 
-				op := RecoveryOperation{
-					TxnID: rec.TxnID,
-					Type:  opType,
-					Key:   key,
-					Value: value,
+					op := RecoveryOperation{
+						TxnID:     rec.TxnID,
+						TableName: tableName,
+						Type:      opType,
+						Key:       key,
+						Value:     value,
+					}
+					wm.txnOperations[rec.TxnID] = append(wm.txnOperations[rec.TxnID], op)
 				}
-				wm.txnOperations[rec.TxnID] = append(wm.txnOperations[rec.TxnID], op)
 			}
 		}
 	}
@@ -518,7 +539,7 @@ func (wm *WALManager) GetDirtyPages() map[page.ResourcePageID]uint64 {
 }
 
 // AddTransactionOperation records an operation for a transaction (used during normal processing)
-func (wm *WALManager) AddTransactionOperation(txnID uint64, opType RecordType, key []byte, value []byte) {
+func (wm *WALManager) AddTransactionOperation(txnID uint64, tableName string, opType RecordType, key []byte, value []byte) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
@@ -527,22 +548,36 @@ func (wm *WALManager) AddTransactionOperation(txnID uint64, opType RecordType, k
 	}
 
 	op := RecoveryOperation{
-		TxnID: txnID,
-		Type:  opType,
-		Key:   key,
-		Value: value,
+		TxnID:     txnID,
+		TableName: tableName,
+		Type:      opType,
+		Key:       key,
+		Value:     value,
 	}
 	wm.txnOperations[txnID] = append(wm.txnOperations[txnID], op)
 
 	// Also write operation to WAL for persistence across manager restarts
-	// We store operations as structured records with Before=len(key), After=operation
+	// We store operations as structured records with Before=operation metadata, After=value
 	rec := WALRecord{
-		TxnID:  txnID,
-		Type:   OPERATION,
-		Before: append([]byte{byte(opType)}, key...), // Store operation type + key
-		After:  value,                                  // Store value
+		TxnID:     txnID,
+		TableName: tableName,
+		Type:      OPERATION,
+		Before:    appendOperationBefore(opType, tableName, key),
+		After:     value,
 	}
 	wm.appendWALRecord(&rec)
+}
+
+func appendOperationBefore(opType RecordType, tableName string, key []byte) []byte {
+	tableNameBytes := []byte(tableName)
+	buf := make([]byte, 0, 3+len(tableNameBytes)+len(key))
+	buf = append(buf, byte(opType))
+	lenBytes := make([]byte, 2)
+	binary.LittleEndian.PutUint16(lenBytes, uint16(len(tableNameBytes)))
+	buf = append(buf, lenBytes...)
+	buf = append(buf, tableNameBytes...)
+	buf = append(buf, key...)
+	return buf
 }
 
 // CleanupTransactionOperations removes operations for a transaction (e.g., on ABORT)

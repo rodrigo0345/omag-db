@@ -2,8 +2,14 @@ package schema
 
 import (
 	"bytes"
+	"sort"
 	"testing"
 )
+
+type mockScanEntry struct {
+	Key   []byte
+	Value []byte
+}
 
 type MockStorageEngine struct {
 	data map[string][]byte
@@ -37,6 +43,23 @@ func (m *MockStorageEngine) Delete(key []byte) error {
 	keyStr := string(key)
 	delete(m.data, keyStr)
 	return nil
+}
+
+func (m *MockStorageEngine) Scan(lower []byte, upper []byte) ([]mockScanEntry, error) {
+	entries := make([]mockScanEntry, 0, len(m.data))
+	for key, value := range m.data {
+		if len(lower) > 0 && key < string(lower) {
+			continue
+		}
+		if len(upper) > 0 && key > string(upper) {
+			continue
+		}
+		valCopy := make([]byte, len(value))
+		copy(valCopy, value)
+		entries = append(entries, mockScanEntry{Key: []byte(key), Value: valCopy})
+	}
+	sort.Slice(entries, func(i, j int) bool { return string(entries[i].Key) < string(entries[j].Key) })
+	return entries, nil
 }
 
 func TestSchemaManager_CreateTable(t *testing.T) {
@@ -140,6 +163,31 @@ func TestSchemaManager_Persistence(t *testing.T) {
 
 	if len(retrieved.Columns) != 2 {
 		t.Fatalf("loaded schema has wrong number of columns")
+	}
+}
+
+func TestSchemaManager_LoadAllSchemas(t *testing.T) {
+	storage := NewMockStorageEngine()
+	manager := NewSchemaManager(storage)
+
+	for _, name := range []string{"users", "orders"} {
+		schema := NewTableSchema(name, "id")
+		schema.AddColumn("id", DataTypeInt64, false)
+		if err := manager.CreateTable(schema); err != nil {
+			t.Fatalf("CreateTable(%s) error = %v", name, err)
+		}
+	}
+
+	manager2 := NewSchemaManager(storage)
+	tables, err := manager2.LoadAllSchemas()
+	if err != nil {
+		t.Fatalf("LoadAllSchemas() error = %v", err)
+	}
+	if len(tables) != 2 {
+		t.Fatalf("LoadAllSchemas() returned %d tables, want 2", len(tables))
+	}
+	if !manager2.TableExists("users") || !manager2.TableExists("orders") {
+		t.Fatalf("LoadAllSchemas() did not hydrate all tables")
 	}
 }
 

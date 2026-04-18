@@ -39,7 +39,7 @@ func TestRecoveryEndToEnd(t *testing.T) {
 	txnID := uint64(100)
 
 	// Record the operations that were performed in this transaction (BEFORE committing)
-	walMgr.AddTransactionOperation(txnID, wallog.PUT, testKey, testValue)
+	walMgr.AddTransactionOperation(txnID, "users", wallog.PUT, testKey, testValue)
 
 	// Simulate a transaction that has committed
 	// First, log the commitment to WAL
@@ -87,6 +87,9 @@ func TestRecoveryEndToEnd(t *testing.T) {
 		if op.Type != wallog.PUT {
 			t.Errorf("expected operation type PUT, got %d", op.Type)
 		}
+		if op.TableName != "users" {
+			t.Errorf("expected table name users, got %q", op.TableName)
+		}
 		if string(op.Key) != string(testKey) {
 			t.Errorf("expected key %s, got %s", string(testKey), string(op.Key))
 		}
@@ -127,7 +130,7 @@ func TestRecoveryMultipleOperations(t *testing.T) {
 	}
 
 	for _, kv := range operations {
-		walMgr.AddTransactionOperation(txnID, wallog.PUT, kv[0], kv[1])
+		walMgr.AddTransactionOperation(txnID, "users", wallog.PUT, kv[0], kv[1])
 	}
 
 	// Commit transaction
@@ -159,6 +162,9 @@ func TestRecoveryMultipleOperations(t *testing.T) {
 			break
 		}
 		op := recoveryState.Operations[i]
+		if op.TableName != "users" {
+			t.Errorf("operation %d: expected table name users, got %q", i, op.TableName)
+		}
 		if string(op.Key) != string(kv[0]) {
 			t.Errorf("operation %d: expected key %s, got %s", i, string(kv[0]), string(op.Key))
 		}
@@ -188,8 +194,8 @@ func TestRecoveryAbortedTransactionCleanup(t *testing.T) {
 
 	// Add operations for transaction
 	txnID := uint64(75)
-	walMgr.AddTransactionOperation(txnID, wallog.PUT, []byte("key1"), []byte("value1"))
-	walMgr.AddTransactionOperation(txnID, wallog.PUT, []byte("key2"), []byte("value2"))
+	walMgr.AddTransactionOperation(txnID, "users", wallog.PUT, []byte("key1"), []byte("value1"))
+	walMgr.AddTransactionOperation(txnID, "users", wallog.PUT, []byte("key2"), []byte("value2"))
 
 	// Abort the transaction
 	walMgr.CleanupTransactionOperations(txnID)

@@ -27,6 +27,7 @@ type TwoPhaseLockingManager struct {
 	writeHandler    write_handler.IWriteHandler
 	rollbackManager *rollback.RollbackManager
 	primaryIndex    storage.IStorageEngine
+	storageResolver func(tableName string) storage.IStorageEngine
 	indexManagers   map[string]*schema.SecondaryIndexManager
 }
 
@@ -50,6 +51,21 @@ func NewTwoPhaseLockingManager(
 	}
 }
 
+func (m *TwoPhaseLockingManager) SetStorageResolver(resolver func(tableName string) storage.IStorageEngine) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.storageResolver = resolver
+}
+
+func (m *TwoPhaseLockingManager) resolveStorageEngine(tableName string) storage.IStorageEngine {
+	if m.storageResolver != nil {
+		if engine := m.storageResolver(tableName); engine != nil {
+			return engine
+		}
+	}
+	return m.primaryIndex
+}
+
 func (m *TwoPhaseLockingManager) BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -69,12 +85,17 @@ func (m *TwoPhaseLockingManager) Read(txnID int64, Key []byte) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("transaction %d not found", txnID)
 	}
+	tableName, _ := transaction.GetTableContext()
+	storageEngine := m.resolveStorageEngine(tableName)
+	if storageEngine == nil {
+		return nil, fmt.Errorf("storage engine is nil")
+	}
 
 	switch transaction.GetIsolationLevel() {
 	case txn_unit.READ_UNCOMMITTED:
 		transaction.RecordReadKey(Key)
 
-		return m.primaryIndex.Get(Key)
+		return storageEngine.Get(Key)
 
 	case txn_unit.READ_COMMITTED:
 
@@ -84,7 +105,7 @@ func (m *TwoPhaseLockingManager) Read(txnID int64, Key []byte) ([]byte, error) {
 		defer m.lockManager.Unlock(transaction, Key)
 		transaction.RecordReadKey(Key)
 
-		return m.primaryIndex.Get(Key)
+		return storageEngine.Get(Key)
 
 	case txn_unit.REPEATABLE_READ:
 
@@ -92,7 +113,7 @@ func (m *TwoPhaseLockingManager) Read(txnID int64, Key []byte) ([]byte, error) {
 			return nil, err
 		}
 		transaction.RecordReadKey(Key)
-		return m.primaryIndex.Get(Key)
+		return storageEngine.Get(Key)
 
 	case txn_unit.SERIALIZABLE:
 
@@ -100,7 +121,7 @@ func (m *TwoPhaseLockingManager) Read(txnID int64, Key []byte) ([]byte, error) {
 			return nil, err
 		}
 		transaction.RecordReadKey(Key)
-		return m.primaryIndex.Get(Key)
+		return storageEngine.Get(Key)
 
 	default:
 		return nil, fmt.Errorf("unsupported isolation level: %d", transaction.GetIsolationLevel())
@@ -166,7 +187,11 @@ func (m *TwoPhaseLockingManager) Delete(txnID int64, Key []byte) error {
 	tableName, tableSchema := transaction.GetTableContext()
 	transaction.RecordTableAccess(tableName)
 
-	beforeImage, _ := m.primaryIndex.Get(Key)
+	storageEngine := m.resolveStorageEngine(tableName)
+	if storageEngine == nil {
+		return fmt.Errorf("storage engine is nil")
+	}
+	beforeImage, _ := storageEngine.Get(Key)
 	if err := m.acquireIndexLocks(transaction, tableName, tableSchema, beforeImage); err != nil {
 		return fmt.Errorf("failed to acquire index locks: %w", err)
 	}
@@ -221,12 +246,16 @@ func (m *TwoPhaseLockingManager) Commit(txnID int64) error {
 			return err
 		}
 
-		m.logManager.Flush(lsn)
+		if err := m.logManager.Flush(lsn); err != nil {
+			return err
+		}
 	}
 
 	if m.bufferManager != nil {
 		if bpm, ok := m.bufferManager.(interface{ FlushAll() error }); ok {
-			bpm.FlushAll()
+			if err := bpm.FlushAll(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

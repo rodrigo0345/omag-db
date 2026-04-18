@@ -2,6 +2,8 @@ package schema
 
 import (
 	"fmt"
+	"reflect"
+	"sort"
 	"sync"
 )
 
@@ -109,10 +111,59 @@ func (sm *SchemaManager) LoadSchema(tableName string) error {
 }
 
 func (sm *SchemaManager) LoadAllSchemas() ([]string, error) {
+	method := reflect.ValueOf(sm.storageBackend).MethodByName("Scan")
+	if !method.IsValid() {
+		return nil, fmt.Errorf("LoadAllSchemas requires storage engine scan support")
+	}
+
+	results := method.Call([]reflect.Value{reflect.ValueOf([]byte(sm.schemaNamespace)), reflect.ValueOf([]byte(nil))})
+	if len(results) != 2 {
+		return nil, fmt.Errorf("unexpected Scan signature")
+	}
+	if !results[1].IsNil() {
+		if err, ok := results[1].Interface().(error); ok && err != nil {
+			return nil, fmt.Errorf("failed to scan schema entries: %w", err)
+		}
+	}
+
+	entriesValue := results[0]
+	if entriesValue.Kind() != reflect.Slice {
+		return nil, fmt.Errorf("unexpected Scan result type")
+	}
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	return nil, fmt.Errorf("LoadAllSchemas not implemented - requires storage engine iterator support")
+	tables := make([]string, 0, entriesValue.Len())
+	for i := 0; i < entriesValue.Len(); i++ {
+		entryValue := entriesValue.Index(i)
+		keyField := entryValue.FieldByName("Key")
+		valueField := entryValue.FieldByName("Value")
+		if !keyField.IsValid() || !valueField.IsValid() {
+			continue
+		}
+
+		key := keyField.Bytes()
+		if !sm.IsSchemaKey(key) {
+			continue
+		}
+
+		tableName := string(key[len(sm.schemaNamespace):])
+		if tableName == "" {
+			continue
+		}
+
+		schema, err := FromJSON(valueField.Bytes())
+		if err != nil {
+			return nil, fmt.Errorf("failed to deserialize schema for table %q: %w", tableName, err)
+		}
+
+		sm.schemas[tableName] = schema
+		tables = append(tables, tableName)
+	}
+
+	sort.Strings(tables)
+	return tables, nil
 }
 
 func (sm *SchemaManager) UpdateTable(schema *TableSchema) error {

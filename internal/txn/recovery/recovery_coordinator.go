@@ -6,9 +6,7 @@ import (
 	"log"
 
 	"github.com/rodrigo0345/omag/internal/storage"
-	"github.com/rodrigo0345/omag/internal/storage/btree"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
-	"github.com/rodrigo0345/omag/internal/storage/lsm"
 	wallog "github.com/rodrigo0345/omag/internal/txn/log"
 	"github.com/rodrigo0345/omag/internal/txn/rollback"
 )
@@ -34,25 +32,28 @@ type RecoveryStats struct {
 }
 
 type DefaultRecoveryCoordinator struct {
-	walMgr        wallog.ILogManager
-	storageEngine storage.IStorageEngine
-	bufferPool    buffer.IBufferPoolManager
-	rollbackMgr   *rollback.RollbackManager
-	stats         RecoveryStats
+	walMgr           wallog.ILogManager
+	storageEngine    storage.IStorageEngine
+	storageResolver  func(tableName string) storage.IStorageEngine
+	bufferPool       buffer.IBufferPoolManager
+	rollbackMgr      *rollback.RollbackManager
+	stats            RecoveryStats
 }
 
 func NewDefaultRecoveryCoordinator(
 	walMgr wallog.ILogManager,
 	storageEngine storage.IStorageEngine,
+	storageResolver func(tableName string) storage.IStorageEngine,
 	bufferPool buffer.IBufferPoolManager,
 	rollbackMgr *rollback.RollbackManager,
 ) RecoveryCoordinator {
 	return &DefaultRecoveryCoordinator{
-		walMgr:        walMgr,
-		storageEngine: storageEngine,
-		bufferPool:    bufferPool,
-		rollbackMgr:   rollbackMgr,
-		stats:         RecoveryStats{},
+		walMgr:          walMgr,
+		storageEngine:    storageEngine,
+		storageResolver: storageResolver,
+		bufferPool:      bufferPool,
+		rollbackMgr:     rollbackMgr,
+		stats:           RecoveryStats{},
 	}
 }
 
@@ -83,26 +84,21 @@ func (rc *DefaultRecoveryCoordinator) RecoverFromCrash(ctx context.Context) (*wa
 }
 
 func (rc *DefaultRecoveryCoordinator) ApplyRecoveryState(ctx context.Context, state *wallog.RecoveryState) error {
-	if lsmEngine, ok := rc.storageEngine.(*lsm.LSMTreeBackend); ok {
-		return rc.applyLSMRecovery(ctx, lsmEngine, state)
+	if state == nil {
+		return fmt.Errorf("recovery state is nil")
 	}
 
-	if btreeEngine, ok := rc.storageEngine.(*btree.BPlusTreeBackend); ok {
-		return rc.applyBTreeRecovery(ctx, btreeEngine, state)
-	}
-
-	log.Printf("[Recovery] Warning: Unknown storage engine type, skipping engine-specific recovery")
-	return nil
-}
-
-func (rc *DefaultRecoveryCoordinator) applyLSMRecovery(ctx context.Context, engine *lsm.LSMTreeBackend, state *wallog.RecoveryState) error {
-	log.Printf("[Recovery] Applying LSM recovery: replaying %d committed transactions with %d operations",
+	log.Printf("[Recovery] Applying table-aware recovery: replaying %d committed transactions with %d operations",
 		len(state.CommittedTxns), len(state.Operations))
 
-	// Replay operations for committed transactions using Put/Delete API
 	for _, op := range state.Operations {
-		// Only replay operations from committed transactions
 		if !state.CommittedTxns[op.TxnID] {
+			continue
+		}
+
+		engine := rc.resolveStorageEngine(op.TableName)
+		if engine == nil {
+			log.Printf("[Recovery] Warning: no storage engine for table %q, skipping op for txn %d", op.TableName, op.TxnID)
 			continue
 		}
 
@@ -118,34 +114,17 @@ func (rc *DefaultRecoveryCoordinator) applyLSMRecovery(ctx context.Context, engi
 		}
 	}
 
-	log.Printf("[Recovery] LSM recovery complete: replayed operations from %d committed transactions", len(state.CommittedTxns))
+	log.Printf("[Recovery] Table-aware recovery complete: replayed operations from %d committed transactions", len(state.CommittedTxns))
 	return nil
 }
 
-func (rc *DefaultRecoveryCoordinator) applyBTreeRecovery(ctx context.Context, engine *btree.BPlusTreeBackend, state *wallog.RecoveryState) error {
-	log.Printf("[Recovery] Applying B+Tree recovery: validating structure and repairing if needed")
-
-	validator := btree.NewBTreeRecoveryValidator(engine, rc.bufferPool)
-	report, err := validator.ValidateStructure()
-	if err != nil {
-		return fmt.Errorf("B+Tree structure validation failed: %w", err)
-	}
-
-	if report.IsCorrupted {
-		log.Printf("[Recovery] B+Tree corruption detected: %d corrupted, %d orphaned, %d broken chains",
-			report.GetCorruptedPageCount(), report.GetOrphanedPageCount(), report.GetBrokenChainCount())
-
-		if err := validator.RepairStructure(report); err != nil {
-			log.Printf("[Recovery] B+Tree repair failed: %v (attempting to continue)", err)
-		}
-
-		if err := validator.VerifyRecovery(); err != nil {
-			log.Printf("[Recovery] B+Tree recovery verification failed: %v", err)
+func (rc *DefaultRecoveryCoordinator) resolveStorageEngine(tableName string) storage.IStorageEngine {
+	if rc.storageResolver != nil {
+		if engine := rc.storageResolver(tableName); engine != nil {
+			return engine
 		}
 	}
-
-	log.Printf("[Recovery] B+Tree recovery complete")
-	return nil
+	return rc.storageEngine
 }
 
 func (rc *DefaultRecoveryCoordinator) ValidateRecoveredState(ctx context.Context, state *wallog.RecoveryState) error {

@@ -245,12 +245,13 @@ func (t *Transaction) ExecuteCleanupCallbacks() error {
 	return nil
 }
 
-func (t *Transaction) RecordRecoveryOperation(opType log.RecordType, key []byte, value []byte) {
+func (t *Transaction) RecordRecoveryOperation(tableName string, opType log.RecordType, key []byte, value []byte) {
 	op := log.RecoveryOperation{
-		TxnID: t.txnID,
-		Type:  opType,
-		Key:   key,
-		Value: value,
+		TxnID:     t.txnID,
+		TableName: tableName,
+		Type:      opType,
+		Key:       key,
+		Value:     value,
 	}
 	t.operations = append(t.operations, op)
 }

@@ -50,8 +50,8 @@ type SSTableMetadata struct {
 
 // LSMMetadata represents the complete LSM state on disk
 type LSMMetadata struct {
-	SSTableID uint64             `json:"sstable_id"`
-	SSTables  []SSTableMetadata  `json:"sstables"`
+	SSTableID uint64            `json:"sstable_id"`
+	SSTables  []SSTableMetadata `json:"sstables"`
 }
 
 // PersistedSSTable represents an SSTable ready for disk storage
@@ -395,9 +395,17 @@ func (l *LSMTreeBackend) Delete(key []byte) error {
 	return nil
 }
 
-func (l *LSMTreeBackend) Scan() ([]storage.ScanEntry, error) {
+func (l *LSMTreeBackend) Scan(lower []byte, upper []byte) ([]storage.ScanEntry, error) {
 	var results []storage.ScanEntry
 	seenKeys := make(map[string]bool)
+	hasLower := len(lower) > 0
+	hasUpper := len(upper) > 0
+	lowerBound := string(lower)
+	upperBound := string(upper)
+
+	if hasLower && hasUpper && lowerBound > upperBound {
+		return nil, fmt.Errorf("lower bound %q is greater than upper bound %q", lower, upper)
+	}
 
 	l.memtableLock.RLock()
 	memtableIter := newSSTableIter(&SSTable{
@@ -432,13 +440,25 @@ func (l *LSMTreeBackend) Scan() ([]storage.ScanEntry, error) {
 		it := heap.Pop(h).(*sstableIter)
 		key := it.key()
 
+		if hasUpper && key > upperBound {
+			break
+		}
+		if hasLower && key < lowerBound {
+			if it.next() {
+				heap.Push(h, it)
+			}
+			continue
+		}
+
 		if !seenKeys[key] {
 			seenKeys[key] = true
 
 			if !it.IsTombstoned() {
+				keyCopy := []byte(key)
+				valueCopy := append([]byte(nil), it.val()...)
 				results = append(results, storage.ScanEntry{
-					Key:   []byte(key),
-					Value: it.val(),
+					Key:   keyCopy,
+					Value: valueCopy,
 				})
 			}
 		}

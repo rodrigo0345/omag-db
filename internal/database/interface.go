@@ -12,9 +12,11 @@ import (
 type Database interface {
 	Close() error
 	StorageEngine() storage.IStorageEngine
+	TableStorageEngine(tableName string) storage.IStorageEngine
 	IsolationManager() txn.IIsolationManager
 	SchemaManager() *schema.SchemaManager
 	RollbackManager() *rollback.RollbackManager
+	Scan(lower []byte, upper []byte) ([]storage.ScanEntry, error)
 
 	BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64
 	Read(txnID int64, key []byte) ([]byte, error)

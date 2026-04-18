@@ -77,18 +77,18 @@ func (mh *MVCCWriteHandler) HandleWrite(txn *txn_unit.Transaction, writeOp Write
 			return fmt.Errorf("storage delete failed: %w", err)
 		}
 		// Record deletion operation for crash recovery
-		txn.RecordRecoveryOperation(log.DELETE, writeOp.Key, nil)
+		txn.RecordRecoveryOperation(writeOp.TableName, log.DELETE, writeOp.Key, nil)
 		if mh.logManager != nil {
-			mh.logManager.AddTransactionOperation(txn.GetID(), log.DELETE, writeOp.Key, nil)
+			mh.logManager.AddTransactionOperation(txn.GetID(), writeOp.TableName, log.DELETE, writeOp.Key, nil)
 		}
 	} else {
 		if err := mh.storageEngine.Put(writeOp.Key, writeOp.Value); err != nil {
 			return fmt.Errorf("storage put failed: %w", err)
 		}
 		// Record put operation for crash recovery
-		txn.RecordRecoveryOperation(log.PUT, writeOp.Key, writeOp.Value)
+		txn.RecordRecoveryOperation(writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
 		if mh.logManager != nil {
-			mh.logManager.AddTransactionOperation(txn.GetID(), log.PUT, writeOp.Key, writeOp.Value)
+			mh.logManager.AddTransactionOperation(txn.GetID(), writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
 		}
 
 		if mh.indexManager != nil && mh.tableSchema != nil {

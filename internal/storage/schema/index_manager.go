@@ -236,15 +236,24 @@ func DecodeSecondaryIndexEntry(data []byte) (*SecondaryIndexEntry, error) {
 	}, nil
 }
 
-func (sim *SecondaryIndexManager) ValidateIndex(indexName string) error {
+func (sim *SecondaryIndexManager) ValidateIndex(tableName string, indexName string) error {
+	if tableName != sim.tableName {
+		return fmt.Errorf("index %q belongs to table %q, not %q", indexName, sim.tableName, tableName)
+	}
 	return fmt.Errorf("index validation requires storage engine iterator support")
 }
 
-func (sim *SecondaryIndexManager) RebuildIndex(indexName string) error {
+func (sim *SecondaryIndexManager) RebuildIndex(tableName string, indexName string) error {
+	if tableName != sim.tableName {
+		return fmt.Errorf("index %q belongs to table %q, not %q", indexName, sim.tableName, tableName)
+	}
 	return fmt.Errorf("index rebuild requires storage engine iterator support")
 }
 
-func (sim *SecondaryIndexManager) CompactIndex(indexName string) error {
+func (sim *SecondaryIndexManager) CompactIndex(tableName string, indexName string) error {
+	if tableName != sim.tableName {
+		return fmt.Errorf("index %q belongs to table %q, not %q", indexName, sim.tableName, tableName)
+	}
 	return fmt.Errorf("index compaction requires storage engine iterator support")
 }
 
@@ -256,7 +265,10 @@ type IndexStats struct {
 	SizeBytes  int64
 }
 
-func (sim *SecondaryIndexManager) GetIndexStats(indexName string) (*IndexStats, error) {
+func (sim *SecondaryIndexManager) GetIndexStats(tableName string, indexName string) (*IndexStats, error) {
+	if tableName != sim.tableName {
+		return nil, fmt.Errorf("index %q belongs to table %q, not %q", indexName, sim.tableName, tableName)
+	}
 	_, err := sim.tableSchema.GetIndex(indexName)
 	if err != nil {
 		return nil, err

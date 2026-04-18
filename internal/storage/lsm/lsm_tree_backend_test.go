@@ -2,11 +2,13 @@ package lsm
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/lsm/mocks"
 	"github.com/rodrigo0345/omag/internal/storage/page"
 	"github.com/rodrigo0345/omag/internal/txn/log"
@@ -21,6 +23,36 @@ func createTestLSM(t *testing.T) *LSMTreeBackend {
 		t.Fatal("failed to create LSM tree backend")
 	}
 	return lsm
+}
+
+func createIsolatedTestLSM(t *testing.T) *LSMTreeBackend {
+	t.Helper()
+
+	mockLogMgr := &mocks.MockLogManager{}
+	mockBufMgr := &mocks.MockBufferManager{}
+
+	lsm := NewLSMTreeBackendWithDataDir(mockLogMgr, mockBufMgr, t.TempDir())
+	if lsm == nil {
+		t.Fatal("failed to create isolated LSM tree backend")
+	}
+	return lsm
+}
+
+func scanEntriesToMap(entries []storage.ScanEntry) map[string]string {
+	result := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		result[string(entry.Key)] = string(entry.Value)
+	}
+	return result
+}
+
+func sortedScanKeys(entries []storage.ScanEntry) []string {
+	keys := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		keys = append(keys, string(entry.Key))
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 type mockLogManager struct {
@@ -51,7 +83,7 @@ func (m *mockLogManager) GetLastCheckpointLSN() uint64 {
 	return 0
 }
 
-func (m *mockLogManager) AddTransactionOperation(txnID uint64, opType log.RecordType, key []byte, value []byte) {
+func (m *mockLogManager) AddTransactionOperation(txnID uint64, tableName string, opType log.RecordType, key []byte, value []byte) {
 
 }
 
@@ -226,6 +258,56 @@ func TestLSMTreeBackend_MultipleKV(t *testing.T) {
 		if string(retrieved) != string(tc.value) {
 			t.Fatalf("key %q: expected %q, got %q", tc.key, tc.value, retrieved)
 		}
+	}
+}
+
+func TestLSMTreeBackend_ScanReturnsMergedView(t *testing.T) {
+	lsm := createIsolatedTestLSM(t)
+
+	if err := lsm.Put([]byte("alpha"), []byte("one")); err != nil {
+		t.Fatalf("Put(alpha) error = %v", err)
+	}
+	if err := lsm.Put([]byte("bravo"), []byte("two")); err != nil {
+		t.Fatalf("Put(bravo) error = %v", err)
+	}
+	if err := lsm.Put([]byte("charlie"), []byte("three")); err != nil {
+		t.Fatalf("Put(charlie) error = %v", err)
+	}
+
+	lsm.flush()
+
+	if err := lsm.Put([]byte("bravo"), []byte("two-updated")); err != nil {
+		t.Fatalf("Put(bravo updated) error = %v", err)
+	}
+	if err := lsm.Delete([]byte("alpha")); err != nil {
+		t.Fatalf("Delete(alpha) error = %v", err)
+	}
+	if err := lsm.Put([]byte("delta"), []byte("four")); err != nil {
+		t.Fatalf("Put(delta) error = %v", err)
+	}
+
+	entries, err := lsm.Scan([]byte("a"), []byte("z"))
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+
+	got := scanEntriesToMap(entries)
+	want := map[string]string{
+		"bravo":   "two-updated",
+		"charlie": "three",
+		"delta":   "four",
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("Scan() entry count = %d, want %d (keys=%v)", len(got), len(want), sortedScanKeys(entries))
+	}
+	for key, wantValue := range want {
+		if got[key] != wantValue {
+			t.Fatalf("Scan() key %q = %q, want %q", key, got[key], wantValue)
+		}
+	}
+	if _, exists := got["alpha"]; exists {
+		t.Fatalf("Scan() unexpectedly returned tombstoned key alpha")
 	}
 }
 
