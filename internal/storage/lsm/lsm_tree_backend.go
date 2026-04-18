@@ -15,6 +15,7 @@ import (
 	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/txn/log"
+	applog "github.com/rodrigo0345/omag/pkg/log"
 )
 
 const SSTableMaxSize = 65536
@@ -24,6 +25,7 @@ const MetadataFile = "metadata.json"
 type LSMTreeBackend struct {
 	logManager    log.ILogManager
 	bufferManager buffer.IBufferPoolManager
+	dataDir       string
 
 	memtable *MemTable
 	levels   [][]*SSTable
@@ -60,17 +62,25 @@ type PersistedSSTable struct {
 }
 
 func NewLSMTreeBackend(log log.ILogManager, buf buffer.IBufferPoolManager) *LSMTreeBackend {
+	return NewLSMTreeBackendWithDataDir(log, buf, LSMDataDir)
+}
+
+func NewLSMTreeBackendWithDataDir(log log.ILogManager, buf buffer.IBufferPoolManager, dataDir string) *LSMTreeBackend {
+	if dataDir == "" {
+		dataDir = LSMDataDir
+	}
 	lsm := &LSMTreeBackend{
 		logManager:       log,
 		bufferManager:    buf,
+		dataDir:          dataDir,
 		memtable:         NewMemTable(),
 		levels:           make([][]*SSTable, 0),
 		compactionPolicy: NewGarneringCompactionPolicy(10.0, 0.5, 4),
 	}
 	lsm.ssTableIdCounter.Store(1)
 
-	if err := lsm.LoadSSTables(LSMDataDir); err != nil {
-		fmt.Printf("[LSMInit] Warning: Failed to load persisted SSTables: %v\n", err)
+	if err := lsm.LoadSSTables(lsm.dataDir); err != nil {
+		applog.Warn("[LSMInit] failed to load persisted SSTables: %v", err)
 	}
 
 	return lsm
@@ -78,23 +88,23 @@ func NewLSMTreeBackend(log log.ILogManager, buf buffer.IBufferPoolManager) *LSMT
 
 // Close gracefully shuts down the LSM backend, flushing any pending data
 func (l *LSMTreeBackend) Close() error {
-	fmt.Printf("[LSMClose] Closing LSM backend...\n")
+	applog.Info("[LSMClose] closing LSM backend")
 
 	l.memtableLock.Lock()
 	hasData := len(l.memtable.data) > 0
 	l.memtableLock.Unlock()
 
 	if hasData {
-		fmt.Printf("[LSMClose] Flushing unflushed memtable to disk before shutdown\n")
+		applog.Info("[LSMClose] flushing unflushed memtable before shutdown")
 		l.flush()
 	}
 
 	if err := l.updateMetadata(); err != nil {
-		fmt.Printf("[LSMClose] Warning: Failed to update metadata on shutdown: %v\n", err)
+		applog.Warn("[LSMClose] failed to update metadata on shutdown: %v", err)
 		return err
 	}
 
-	fmt.Printf("[LSMClose] LSM backend closed successfully\n")
+	applog.Info("[LSMClose] LSM backend closed successfully")
 	return nil
 }
 
@@ -172,11 +182,11 @@ func (l *LSMTreeBackend) flush() {
 	l.memtableLock.Unlock()
 
 	if err := l.persistSSTable(sstable, sstableID, levelNum); err != nil {
-		fmt.Printf("[LSMFlush] Warning: Failed to persist SSTable %d: %v\n", sstableID, err)
+		applog.Warn("[LSMFlush] failed to persist SSTable %d: %v", sstableID, err)
 	}
 
 	if err := l.updateMetadata(); err != nil {
-		fmt.Printf("[LSMFlush] Warning: Failed to update metadata: %v\n", err)
+		applog.Warn("[LSMFlush] failed to update metadata: %v", err)
 	}
 
 	l.compactIfNeeded()
@@ -467,8 +477,8 @@ func (l *LSMTreeBackend) ReplayFromWAL(recoveryState *log.RecoveryState) error {
 	abortedCount := len(recoveryState.AbortedTxns)
 	tobeRedoneCount := len(recoveryState.TobeRedone)
 
-	fmt.Printf("[LSMRecovery] LSM recovery - WAL handled at buffer pool level\n")
-	fmt.Printf("[LSMRecovery] Recovery state: %d committed txns, %d aborted txns, %d tobeRedone txns\n",
+	applog.Debug("[LSMRecovery] LSM recovery - WAL handled at buffer pool level")
+	applog.Debug("[LSMRecovery] Recovery state: %d committed txns, %d aborted txns, %d tobeRedone txns",
 		committedCount, abortedCount, tobeRedoneCount)
 
 	// IMPORTANT: LSM data recovery strategy:
@@ -480,13 +490,13 @@ func (l *LSMTreeBackend) ReplayFromWAL(recoveryState *log.RecoveryState) error {
 	// Until then, data written before crash will be lost after recovery
 	// (This is acceptable for in-development LSM but not for production)
 
-	fmt.Printf("[LSMRecovery] WARNING: LSM SSTables are not yet persisted to disk\n")
-	fmt.Printf("[LSMRecovery] Any data flushed to SSTables before crash cannot be recovered\n")
+	applog.Warn("[LSMRecovery] LSM SSTables are not yet persisted to disk")
+	applog.Warn("[LSMRecovery] any data flushed to SSTables before crash cannot be recovered")
 
 	// Start with a fresh memtable for new writes
 	l.memtable = NewMemTable()
 
-	fmt.Printf("[LSMRecovery] LSM recovery complete - ready for new writes\n")
+	applog.Info("[LSMRecovery] LSM recovery complete - ready for new writes")
 	return nil
 }
 
@@ -544,7 +554,7 @@ func (l *LSMTreeBackend) replayTransaction(txnID uint64, lsns []uint64, lsnToRec
 		// Validate After image
 		if len(walRecord.After) == 0 {
 			stats.recordsSkipped++
-			fmt.Printf("[LSMRecovery] Warning: Empty After image for LSN %d, txn %d\n", lsn, txnID)
+			applog.Warn("[LSMRecovery] empty after image for LSN %d, txn %d", lsn, txnID)
 			continue
 		}
 
@@ -612,7 +622,7 @@ func (l *LSMTreeBackend) verifyMemtableIntegrity() error {
 
 // persistSSTable saves an SSTable to disk in binary format
 func (l *LSMTreeBackend) persistSSTable(sstable *SSTable, id uint64, level int) error {
-	levelDir := filepath.Join(LSMDataDir, fmt.Sprintf("level_%d", level))
+	levelDir := filepath.Join(l.dataDir, fmt.Sprintf("level_%d", level))
 	if err := os.MkdirAll(levelDir, 0755); err != nil {
 		return fmt.Errorf("failed to create level directory: %w", err)
 	}
@@ -677,14 +687,14 @@ func (l *LSMTreeBackend) persistSSTable(sstable *SSTable, id uint64, level int) 
 		return fmt.Errorf("failed to write SSTable file: %w", err)
 	}
 
-	fmt.Printf("[LSMPersist] SSTable %d persisted to %s (%d bytes)\n", id, filePath, buf.Len())
+	applog.Debug("[LSMPersist] SSTable %d persisted to %s (%d bytes)", id, filePath, buf.Len())
 	return nil
 }
 
 // updateMetadata writes LSM metadata to disk
 func (l *LSMTreeBackend) updateMetadata() error {
 	// Create directory
-	if err := os.MkdirAll(LSMDataDir, 0755); err != nil {
+	if err := os.MkdirAll(l.dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create lsm data directory: %w", err)
 	}
 
@@ -708,7 +718,7 @@ func (l *LSMTreeBackend) updateMetadata() error {
 	}
 
 	// Write metadata file
-	filePath := filepath.Join(LSMDataDir, MetadataFile)
+	filePath := filepath.Join(l.dataDir, MetadataFile)
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal metadata: %w", err)
@@ -718,7 +728,7 @@ func (l *LSMTreeBackend) updateMetadata() error {
 		return fmt.Errorf("failed to write metadata file: %w", err)
 	}
 
-	fmt.Printf("[LSMMetadata] Metadata updated: %d SSTables, next ID: %d\n", len(sstables), metadata.SSTableID)
+	applog.Debug("[LSMMetadata] metadata updated: %d SSTables, next ID: %d", len(sstables), metadata.SSTableID)
 	return nil
 }
 
@@ -728,7 +738,7 @@ func (l *LSMTreeBackend) LoadSSTables(dir string) error {
 
 	// Check if metadata file exists
 	if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
-		fmt.Printf("[LSMLoad] No persisted SSTables found (metadata file missing)\n")
+		applog.Debug("[LSMLoad] no persisted SSTables found (metadata file missing)")
 		return nil // No persisted data is OK
 	}
 
@@ -743,7 +753,7 @@ func (l *LSMTreeBackend) LoadSSTables(dir string) error {
 		return fmt.Errorf("failed to unmarshal metadata: %w", err)
 	}
 
-	fmt.Printf("[LSMLoad] Found metadata: %d SSTables, next ID: %d\n", len(metadata.SSTables), metadata.SSTableID)
+	applog.Debug("[LSMLoad] found metadata: %d SSTables, next ID: %d", len(metadata.SSTables), metadata.SSTableID)
 
 	// Update SSTable ID counter
 	l.ssTableIdCounter.Store(metadata.SSTableID)
@@ -773,13 +783,13 @@ func (l *LSMTreeBackend) LoadSSTables(dir string) error {
 	loadedCount := 0
 	for _, stMeta := range metadata.SSTables {
 		if err := l.loadSSTable(dir, stMeta.ID, stMeta.Level); err != nil {
-			fmt.Printf("[LSMLoad] Warning: Failed to load SSTable %d from level %d: %v\n", stMeta.ID, stMeta.Level, err)
+			applog.Warn("[LSMLoad] failed to load SSTable %d from level %d: %v", stMeta.ID, stMeta.Level, err)
 			continue
 		}
 		loadedCount++
 	}
 
-	fmt.Printf("[LSMLoad] Successfully loaded %d SSTables\n", loadedCount)
+	applog.Info("[LSMLoad] successfully loaded %d SSTables", loadedCount)
 
 	// Recalculate total items
 	l.recalculateTotalItems()
@@ -882,7 +892,7 @@ func (l *LSMTreeBackend) loadSSTable(dir string, id uint64, level int) error {
 	l.levels[level] = append(l.levels[level], sstable)
 	l.levelsLock.Unlock()
 
-	fmt.Printf("[LSMLoad] Loaded SSTable %d (level %d) with %d entries, %d tombstones\n", id, level, len(data), len(tombstones))
+	applog.Debug("[LSMLoad] loaded SSTable %d (level %d) with %d entries, %d tombstones", id, level, len(data), len(tombstones))
 	return nil
 }
 

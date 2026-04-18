@@ -17,6 +17,7 @@ import (
 
 type TransactionID uint64
 
+// DEPRECATED: This is a simplified 2PL manager for demonstration purposes. It does not handle deadlocks, timeouts, or other complexities of a production-grade 2PL implementation.
 type TwoPhaseLockingManager struct {
 	mu              sync.RWMutex
 	transactions    map[TransactionID]*txn_unit.Transaction
@@ -71,6 +72,7 @@ func (m *TwoPhaseLockingManager) Read(txnID int64, Key []byte) ([]byte, error) {
 
 	switch transaction.GetIsolationLevel() {
 	case txn_unit.READ_UNCOMMITTED:
+		transaction.RecordReadKey(Key)
 
 		return m.primaryIndex.Get(Key)
 
@@ -80,6 +82,7 @@ func (m *TwoPhaseLockingManager) Read(txnID int64, Key []byte) ([]byte, error) {
 			return nil, err
 		}
 		defer m.lockManager.Unlock(transaction, Key)
+		transaction.RecordReadKey(Key)
 
 		return m.primaryIndex.Get(Key)
 
@@ -88,6 +91,7 @@ func (m *TwoPhaseLockingManager) Read(txnID int64, Key []byte) ([]byte, error) {
 		if err := m.lockManager.LockShared(transaction, Key); err != nil {
 			return nil, err
 		}
+		transaction.RecordReadKey(Key)
 		return m.primaryIndex.Get(Key)
 
 	case txn_unit.SERIALIZABLE:
@@ -95,6 +99,7 @@ func (m *TwoPhaseLockingManager) Read(txnID int64, Key []byte) ([]byte, error) {
 		if err := m.lockManager.LockShared(transaction, Key); err != nil {
 			return nil, err
 		}
+		transaction.RecordReadKey(Key)
 		return m.primaryIndex.Get(Key)
 
 	default:
@@ -114,8 +119,10 @@ func (m *TwoPhaseLockingManager) Write(txnID int64, Key []byte, Value []byte) er
 	if err := m.lockManager.LockExclusive(transaction, Key); err != nil {
 		return err
 	}
+	transaction.RecordWriteKey(Key)
 
 	tableName, tableSchema := transaction.GetTableContext()
+	transaction.RecordTableAccess(tableName)
 
 	if err := m.acquireIndexLocks(transaction, tableName, tableSchema, Value); err != nil {
 		return fmt.Errorf("failed to acquire index locks: %w", err)
@@ -134,6 +141,50 @@ func (m *TwoPhaseLockingManager) Write(txnID int64, Key []byte, Value []byte) er
 		Value:      Value,
 		PageID:     0,
 		Offset:     0,
+		TableName:  tableName,
+		SchemaInfo: tableSchema,
+		PrimaryKey: Key,
+	}
+
+	return m.writeHandler.HandleWrite(transaction, writeOp)
+}
+
+func (m *TwoPhaseLockingManager) Delete(txnID int64, Key []byte) error {
+	m.mu.RLock()
+	transaction, ok := m.transactions[TransactionID(txnID)]
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("transaction %d not found", txnID)
+	}
+
+	if err := m.lockManager.LockExclusive(transaction, Key); err != nil {
+		return err
+	}
+	transaction.RecordWriteKey(Key)
+
+	tableName, tableSchema := transaction.GetTableContext()
+	transaction.RecordTableAccess(tableName)
+
+	beforeImage, _ := m.primaryIndex.Get(Key)
+	if err := m.acquireIndexLocks(transaction, tableName, tableSchema, beforeImage); err != nil {
+		return fmt.Errorf("failed to acquire index locks: %w", err)
+	}
+
+	if tableSchema != nil && m.indexManagers != nil {
+		if indexMgr, exists := m.indexManagers[tableName]; exists && indexMgr != nil {
+			if err := m.writeHandler.SetIndexContext(tableSchema, indexMgr); err != nil {
+				return fmt.Errorf("failed to set index context: %w", err)
+			}
+		}
+	}
+
+	writeOp := write_handler.WriteOperation{
+		Key:        Key,
+		Value:      nil,
+		PageID:     0,
+		Offset:     0,
+		IsDelete:   true,
 		TableName:  tableName,
 		SchemaInfo: tableSchema,
 		PrimaryKey: Key,

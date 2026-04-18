@@ -1,4 +1,6 @@
-package txn
+package rollback
+
+// Package-local tests.
 
 import (
 	"os"

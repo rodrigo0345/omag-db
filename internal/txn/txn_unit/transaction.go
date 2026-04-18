@@ -2,6 +2,7 @@ package txn_unit
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/storage/schema"
@@ -33,6 +34,9 @@ type Transaction struct {
 	isolationLevel   uint8
 	tableName        string
 	tableSchema      *schema.TableSchema
+	readSet          map[string]struct{}
+	writeSet         map[string]struct{}
+	touchedTables    map[string]struct{}
 	cleanupCallbacks []func() error
 	operations       []log.RecoveryOperation // Operations for crash recovery
 	txn_write_prefix string // used to manage isolation level copies
@@ -46,21 +50,13 @@ func NewTransaction(txnID uint64, isolationLevel uint8) *Transaction {
 		exclusiveLocks:   make([][]byte, 0),
 		undoLog:          undo.NewUndoLog(txnID),
 		isolationLevel:   isolationLevel,
-		tableName:        "",
-		tableSchema:      nil,
+		readSet:          make(map[string]struct{}),
+		writeSet:         make(map[string]struct{}),
+		touchedTables:    make(map[string]struct{}),
 		cleanupCallbacks: make([]func() error, 0),
 		operations:       make([]log.RecoveryOperation, 0),
 		txn_write_prefix: fmt.Sprintf("#txn_%d_%d", txnID, isolationLevel),
 	}
-}
-
-func (t *Transaction) SetTableContext(tableName string, tableSchema *schema.TableSchema) {
-	t.tableName = tableName
-	t.tableSchema = tableSchema
-}
-
-func (t *Transaction) GetTableContext() (string, *schema.TableSchema) {
-	return t.tableName, t.tableSchema
 }
 
 func (t *Transaction) GetID() uint64 {
@@ -101,6 +97,65 @@ func (t *Transaction) GetUndoLog() *undo.UndoLog {
 
 func (t *Transaction) GetIsolationLevel() uint8 {
 	return t.isolationLevel
+}
+
+func (t *Transaction) SetTableContext(tableName string, tableSchema *schema.TableSchema) {
+	t.tableName = tableName
+	t.tableSchema = tableSchema
+	if tableName != "" {
+		t.RecordTableAccess(tableName)
+	}
+}
+
+func (t *Transaction) GetTableContext() (string, *schema.TableSchema) {
+	return t.tableName, t.tableSchema
+}
+
+func (t *Transaction) RecordTableAccess(tableName string) {
+	if tableName == "" {
+		return
+	}
+	if t.touchedTables == nil {
+		t.touchedTables = make(map[string]struct{})
+	}
+	t.touchedTables[tableName] = struct{}{}
+}
+
+func (t *Transaction) RecordReadKey(key []byte) {
+	if len(key) == 0 {
+		return
+	}
+	if t.readSet == nil {
+		t.readSet = make(map[string]struct{})
+	}
+	t.readSet[string(key)] = struct{}{}
+}
+
+func (t *Transaction) RecordWriteKey(key []byte) {
+	if len(key) == 0 {
+		return
+	}
+	if t.writeSet == nil {
+		t.writeSet = make(map[string]struct{})
+	}
+	t.writeSet[string(key)] = struct{}{}
+}
+
+func (t *Transaction) GetReadSet() [][]byte {
+	return stringSetToSortedBytes(t.readSet)
+}
+
+func (t *Transaction) GetWriteSet() [][]byte {
+	return stringSetToSortedBytes(t.writeSet)
+}
+
+func (t *Transaction) GetTouchedTables() []string {
+	tables := make([]string, 0, len(t.touchedTables))
+	for tableName := range t.touchedTables {
+		tables = append(tables, tableName)
+	}
+	sort.Strings(tables)
+	return tables
 }
 
 func (t *Transaction) GetSharedLocks() [][]byte {
@@ -155,6 +210,24 @@ func bytesEqual(a, b []byte) bool {
 		}
 	}
 	return true
+}
+
+func stringSetToSortedBytes(values map[string]struct{}) [][]byte {
+	if len(values) == 0 {
+		return [][]byte{}
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	result := make([][]byte, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, []byte(key))
+	}
+	return result
 }
 
 func (t *Transaction) RegisterCleanupCallback(cleanup func() error) {

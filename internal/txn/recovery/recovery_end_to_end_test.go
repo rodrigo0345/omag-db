@@ -1,4 +1,6 @@
-package txn
+package recovery
+
+// Package-local tests.
 
 import (
 	"os"

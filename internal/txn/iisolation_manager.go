@@ -7,6 +7,7 @@ type IIsolationManager interface {
 	BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64
 	Read(txnID int64, Key []byte) ([]byte, error)
 	Write(txnID int64, Key []byte, Value []byte) error
+	Delete(txnID int64, Key []byte) error
 	Commit(txnID int64) error
 	Abort(txnID int64) error
 	Close() error

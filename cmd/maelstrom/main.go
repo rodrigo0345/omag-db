@@ -7,7 +7,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/rodrigo0345/omag/cmd/cli"
+	"github.com/rodrigo0345/omag/internal/database"
 	"github.com/rodrigo0345/omag/internal/txn"
 	"github.com/rodrigo0345/omag/internal/txn/txn_unit"
 )
@@ -25,8 +25,8 @@ type Node struct {
 	msgID   int
 	msgIDMu sync.Mutex
 
+	db       database.Database
 	txnManager txn.IIsolationManager
-	lsmStorageEngine *cli.LSMStorageEngine
 }
 
 // NewNode creates a new Maelstrom node
@@ -52,9 +52,16 @@ func (n *Node) Start() error {
 
 		if msgType == "init" {
 
-			lsmStorageEngine, txnManager := cli.NewLSMStorageEngine()
-			n.lsmStorageEngine = lsmStorageEngine
-			n.txnManager = txnManager
+			engine, err := database.OpenMVCCLSM(database.Options{
+				DBPath:     "./test.db",
+				LSMDataDir: "./lsm_data",
+				WALPath:    "./test.wal",
+			})
+			if err != nil {
+				continue
+			}
+			n.db = engine
+			n.txnManager = engine.IsolationManager()
 
 			nodeID, _ := msg.Body["node_id"].(string)
 			n.nodeID = nodeID
@@ -95,7 +102,11 @@ func (n *Node) Start() error {
 func (n *Node) executeTxn(txnOps []any) []any {
 	var results []any
 
-	txnID := n.txnManager.BeginTransaction(txn_unit.SERIALIZABLE, "test_table", nil)
+	if n.db == nil {
+		return results
+	}
+
+	txnID := n.db.BeginTransaction(txn_unit.SERIALIZABLE, "test_table", nil)
 
 	for _, opAny := range txnOps {
 		op, ok := opAny.([]any)
@@ -113,7 +124,7 @@ func (n *Node) executeTxn(txnOps []any) []any {
 
 		switch f {
 		case "r":
-			if val, err := n.txnManager.Read(txnID, []byte(k)); err == nil {
+			if val, err := n.db.Read(txnID, []byte(k)); err == nil {
 				results = append(results, []any{"r", op[1], val})
 			} else {
 				results = append(results, []any{"r", op[1], nil})
@@ -123,7 +134,7 @@ func (n *Node) executeTxn(txnOps []any) []any {
 			if err != nil {
 				panic("Failed to marshal write value")
 			}
-			err = n.txnManager.Write(txnID, []byte(k), byteData)
+			err = n.db.Write(txnID, []byte(k), byteData)
 			if err != nil {
 				results = append(results, []any{"w", op[1], nil})
 			}
@@ -132,7 +143,7 @@ func (n *Node) executeTxn(txnOps []any) []any {
 			panic("Operation not supported")
 		}
 	}
-	n.txnManager.Commit(txnID)
+	n.db.Commit(txnID)
 
 	return results
 }

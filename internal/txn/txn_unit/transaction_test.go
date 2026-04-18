@@ -1,4 +1,6 @@
-package txn
+package txn_unit
+
+// Package-local tests.
 
 import (
 	"testing"

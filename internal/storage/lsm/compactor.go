@@ -1,8 +1,9 @@
 package lsm
 
 import (
-	"fmt"
 	"math"
+
+	applog "github.com/rodrigo0345/omag/pkg/log"
 )
 
 type CompactionPolicy interface {
@@ -19,7 +20,7 @@ type GarneringCompactionPolicy struct {
 
 func NewGarneringCompactionPolicy(t, c float64, l0Cap int) *GarneringCompactionPolicy {
 	if c >= 1.0 || c <= 0 {
-		fmt.Println("Warning: c should be between 0 and 1, defaulting to 0.5")
+		applog.Warn("[LSMCompaction] c should be between 0 and 1, defaulting to 0.5")
 		c = 0.5
 	}
 	return &GarneringCompactionPolicy{

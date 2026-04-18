@@ -3,6 +3,7 @@ package isolation
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
@@ -22,7 +23,7 @@ type MVCCManager struct {
 	rollbackManager *rollback.RollbackManager
 	primaryIndex    storage.IStorageEngine
 	indexManagers   map[string]*schema.SecondaryIndexManager
-	nextTxnID       int64
+	nextTxnID       atomic.Int64
 	indexSnapshots  map[TransactionID]map[string]string
 }
 
@@ -42,7 +43,6 @@ func NewMVCCManager(
 		rollbackManager: rollbackMgr,
 		primaryIndex:    primaryIndex,
 		indexManagers:   indexManagers,
-		nextTxnID:       1,
 		indexSnapshots:  make(map[TransactionID]map[string]string),
 	}
 }
@@ -51,8 +51,7 @@ func (m *MVCCManager) BeginTransaction(isolationLevel uint8, tableName string, t
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	txnID := m.nextTxnID
-	m.nextTxnID++
+	txnID := m.nextTxnID.Add(1)
 
 	transaction := txn_unit.NewTransaction(uint64(txnID), isolationLevel)
 	transaction.SetTableContext(tableName, tableSchema)
@@ -73,6 +72,7 @@ func (m *MVCCManager) Read(txnID int64, Key []byte) ([]byte, error) {
 	}
 
 	_ = transaction
+	transaction.RecordReadKey(Key)
 	return m.primaryIndex.Get(Key)
 }
 
@@ -86,6 +86,8 @@ func (m *MVCCManager) Write(txnID int64, Key []byte, Value []byte) error {
 	}
 
 	tableName, tableSchema := transaction.GetTableContext()
+	transaction.RecordWriteKey(Key)
+	transaction.RecordTableAccess(tableName)
 
 	if tableSchema != nil && m.indexManagers != nil {
 		if indexMgr, exists := m.indexManagers[tableName]; exists && indexMgr != nil {
@@ -100,6 +102,41 @@ func (m *MVCCManager) Write(txnID int64, Key []byte, Value []byte) error {
 		Value:      Value,
 		PageID:     0,
 		Offset:     0,
+		TableName:  tableName,
+		SchemaInfo: tableSchema,
+		PrimaryKey: Key,
+	}
+
+	return m.writeHandler.HandleWrite(transaction, writeOp)
+}
+
+func (m *MVCCManager) Delete(txnID int64, Key []byte) error {
+	m.mu.RLock()
+	transaction, ok := m.transactions[TransactionID(txnID)]
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("transaction %d not found", txnID)
+	}
+
+	tableName, tableSchema := transaction.GetTableContext()
+	transaction.RecordWriteKey(Key)
+	transaction.RecordTableAccess(tableName)
+
+	if tableSchema != nil && m.indexManagers != nil {
+		if indexMgr, exists := m.indexManagers[tableName]; exists && indexMgr != nil {
+			if err := m.writeHandler.SetIndexContext(tableSchema, indexMgr); err != nil {
+				return fmt.Errorf("failed to set index context: %w", err)
+			}
+		}
+	}
+
+	writeOp := write_handler.WriteOperation{
+		Key:        Key,
+		Value:      nil,
+		PageID:     0,
+		Offset:     0,
+		IsDelete:   true,
 		TableName:  tableName,
 		SchemaInfo: tableSchema,
 		PrimaryKey: Key,
