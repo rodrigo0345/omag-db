@@ -5,6 +5,7 @@ import (
 	"github.com/rodrigo0345/omag/internal/storage/schema"
 	"github.com/rodrigo0345/omag/internal/txn"
 	"github.com/rodrigo0345/omag/internal/txn/rollback"
+	"github.com/rodrigo0345/omag/internal/txn/synchronization"
 )
 
 // Database describes the small, opinionated entry point for the preferred
@@ -13,6 +14,8 @@ type Database interface {
 	Close() error
 	StorageEngine() storage.IStorageEngine
 	TableStorageEngine(tableName string) storage.IStorageEngine
+	ReplicationCoordinator() synchronization.ReplicationCoordinator
+	ReplicationConfig() synchronization.ReplicationConfig
 	IsolationManager() txn.IIsolationManager
 	SchemaManager() *schema.SchemaManager
 	RollbackManager() *rollback.RollbackManager
@@ -24,6 +27,7 @@ type Database interface {
 	Delete(txnID int64, key []byte) error
 	Commit(txnID int64) error
 	Abort(txnID int64) error
+	UpdateRaftLeadership(localNodeID string, leaderNodeID string, term uint64) error
 
 	CreateTable(tableSchema *schema.TableSchema) error
 	DropTable(tableName string) error

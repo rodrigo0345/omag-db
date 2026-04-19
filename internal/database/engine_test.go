@@ -2,9 +2,11 @@ package database
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rodrigo0345/omag/internal/storage/schema"
+	"github.com/rodrigo0345/omag/internal/txn/synchronization"
 	"github.com/rodrigo0345/omag/internal/txn/txn_unit"
 )
 
@@ -371,6 +373,93 @@ func TestOpenMVCCLSM_SeedsTxnIDFromRecovery(t *testing.T) {
 	}
 	if err := secondEngine.Commit(nextTxnID); err != nil {
 		t.Fatalf("Commit(%d) after restart error = %v", nextTxnID, err)
+	}
+}
+
+func TestOpenMVCCLSM_AppliesRaftLeadershipConfig(t *testing.T) {
+	tmp := t.TempDir()
+	engine, err := OpenMVCCLSM(Options{
+		DBPath:     filepath.Join(tmp, "db.db"),
+		LSMDataDir: filepath.Join(tmp, "lsm"),
+		WALPath:    filepath.Join(tmp, "wal.log"),
+		ReplicationConfig: synchronization.ReplicationConfig{
+			Strategy:     synchronization.SyncStrategyRaft,
+			Backend:      synchronization.ReplicationBackendMaelstrom,
+			ReadPolicy:   synchronization.SyncPolicySynchronous,
+			WritePolicy:  synchronization.SyncPolicyQuorum,
+			MinWriteAcks: 1,
+			LocalNodeID:  "n2",
+			LeaderNodeID: "n1",
+			CurrentTerm:  3,
+		},
+	})
+	if err != nil {
+		t.Fatalf("OpenMVCCLSM() error = %v", err)
+	}
+	defer func() { _ = engine.Close() }()
+
+	txnID := engine.BeginTransaction(txn_unit.SERIALIZABLE, "", nil)
+	err = engine.Write(txnID, []byte("k"), []byte("v"))
+	if err == nil {
+		t.Fatal("expected raft leader check to reject non-leader write")
+	}
+	if !strings.Contains(err.Error(), "not leader") {
+		t.Fatalf("Write() error = %v, want not-leader error", err)
+	}
+	_ = engine.Abort(txnID)
+}
+
+func TestEngine_UpdateRaftLeadership_DynamicTransition(t *testing.T) {
+	tmp := t.TempDir()
+	engine, err := OpenMVCCLSM(Options{
+		DBPath:     filepath.Join(tmp, "db.db"),
+		LSMDataDir: filepath.Join(tmp, "lsm"),
+		WALPath:    filepath.Join(tmp, "wal.log"),
+		ReplicationConfig: synchronization.ReplicationConfig{
+			Strategy:     synchronization.SyncStrategyRaft,
+			Backend:      synchronization.ReplicationBackendMaelstrom,
+			ReadPolicy:   synchronization.SyncPolicySynchronous,
+			WritePolicy:  synchronization.SyncPolicyQuorum,
+			MinWriteAcks: 1,
+			LocalNodeID:  "n2",
+			LeaderNodeID: "n2",
+			CurrentTerm:  2,
+		},
+	})
+	if err != nil {
+		t.Fatalf("OpenMVCCLSM() error = %v", err)
+	}
+	defer func() { _ = engine.Close() }()
+
+	txnID := engine.BeginTransaction(txn_unit.SERIALIZABLE, "", nil)
+	if err := engine.Write(txnID, []byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Write() as leader error = %v", err)
+	}
+	_ = engine.Abort(txnID)
+
+	if err := engine.UpdateRaftLeadership("n2", "", 3); err != nil {
+		t.Fatalf("UpdateRaftLeadership(leader crash) error = %v", err)
+	}
+	txnID = engine.BeginTransaction(txn_unit.SERIALIZABLE, "", nil)
+	err = engine.Write(txnID, []byte("k2"), []byte("v2"))
+	if err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("Write() during election error = %v, want leadership-not-configured", err)
+	}
+	_ = engine.Abort(txnID)
+
+	if err := engine.UpdateRaftLeadership("n2", "n3", 4); err != nil {
+		t.Fatalf("UpdateRaftLeadership(new leader) error = %v", err)
+	}
+	txnID = engine.BeginTransaction(txn_unit.SERIALIZABLE, "", nil)
+	err = engine.Write(txnID, []byte("k3"), []byte("v3"))
+	if err == nil || !strings.Contains(err.Error(), "not leader") {
+		t.Fatalf("Write() as follower error = %v, want not-leader", err)
+	}
+	_ = engine.Abort(txnID)
+
+	err = engine.UpdateRaftLeadership("n2", "n2", 3)
+	if err == nil || !strings.Contains(err.Error(), "stale raft term") {
+		t.Fatalf("UpdateRaftLeadership(stale term) error = %v, want stale-term error", err)
 	}
 }
 

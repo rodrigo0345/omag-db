@@ -109,6 +109,9 @@ func (dh *DefaultWriteHandler) HandleWrite(txn *txn_unit.Transaction, writeOp Wr
 		txn.RecordRecoveryOperation(writeOp.TableName, log.DELETE, writeOp.Key, nil)
 		if dh.logManager != nil {
 			dh.logManager.AddTransactionOperation(txn.GetID(), writeOp.TableName, log.DELETE, writeOp.Key, nil)
+			if intentLogger, ok := dh.logManager.(log.ReplicationIntentLogger); ok {
+				intentLogger.LogReplicationIntent(txn.GetID(), writeOp.TableName, log.DELETE, writeOp.Key, nil)
+			}
 		}
 	} else {
 		if err := storageEngine.Put(writeOp.Key, writeOp.Value); err != nil {
@@ -118,6 +121,9 @@ func (dh *DefaultWriteHandler) HandleWrite(txn *txn_unit.Transaction, writeOp Wr
 		txn.RecordRecoveryOperation(writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
 		if dh.logManager != nil {
 			dh.logManager.AddTransactionOperation(txn.GetID(), writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
+			if intentLogger, ok := dh.logManager.(log.ReplicationIntentLogger); ok {
+				intentLogger.LogReplicationIntent(txn.GetID(), writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
+			}
 		}
 
 		if dh.indexManager != nil && dh.tableSchema != nil {

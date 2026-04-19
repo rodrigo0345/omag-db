@@ -13,13 +13,14 @@ import (
 type RecordType uint8
 
 const (
-	UPDATE     RecordType = iota
+	UPDATE RecordType = iota
 	COMMIT
 	ABORT
 	CHECKPOINT
-	PUT        RecordType = 10
-	DELETE     RecordType = 11
-	OPERATION  RecordType = 12 // Operation record for recovery
+	PUT                RecordType = 10
+	DELETE             RecordType = 11
+	OPERATION          RecordType = 12 // Operation record for recovery
+	REPLICATION_INTENT RecordType = 13 // Replication intent metadata for coordinators
 )
 
 type DirtyPageTable map[page.ResourcePageID]uint64
@@ -68,9 +69,9 @@ type WALManager struct {
 	lastCheckpointDPT DirtyPageTable
 	lastCheckpointATT ActiveTransactionTable
 
-	activeTxns   map[uint64]bool
-	txnLastLSN   map[uint64]uint64
-	pageVersions map[page.ResourcePageID]uint64
+	activeTxns    map[uint64]bool
+	txnLastLSN    map[uint64]uint64
+	pageVersions  map[page.ResourcePageID]uint64
 	txnOperations map[uint64][]RecoveryOperation // Track operations per transaction
 }
 
@@ -165,7 +166,6 @@ func (wm *WALManager) appendWALRecord(v *WALRecord) (LSN, error) {
 
 	return LSN(wm.lsn), nil
 }
-
 
 func (wm *WALManager) serializeWALRecord(rec WALRecord) []byte {
 	buf := make([]byte, 0, 256)
@@ -576,6 +576,20 @@ func (wm *WALManager) AddTransactionOperation(txnID uint64, tableName string, op
 		After:     value,
 	}
 	wm.appendWALRecord(&rec)
+}
+
+func (wm *WALManager) LogReplicationIntent(txnID uint64, tableName string, opType RecordType, key []byte, value []byte) {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+
+	rec := WALRecord{
+		TxnID:     txnID,
+		TableName: tableName,
+		Type:      REPLICATION_INTENT,
+		Before:    appendOperationBefore(opType, tableName, key),
+		After:     value,
+	}
+	_, _ = wm.appendWALRecord(&rec)
 }
 
 func appendOperationBefore(opType RecordType, tableName string, key []byte) []byte {

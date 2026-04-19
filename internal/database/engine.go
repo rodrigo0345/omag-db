@@ -17,6 +17,7 @@ import (
 	"github.com/rodrigo0345/omag/internal/txn/log"
 	"github.com/rodrigo0345/omag/internal/txn/recovery"
 	"github.com/rodrigo0345/omag/internal/txn/rollback"
+	"github.com/rodrigo0345/omag/internal/txn/synchronization"
 	"github.com/rodrigo0345/omag/internal/txn/write_handler"
 )
 
@@ -27,27 +28,31 @@ const (
 
 // Options configures the default MVCC + LSM engine.
 type Options struct {
-	DBPath           string
-	LSMDataDir       string
-	WALPath          string
-	BufferPoolSize   int
-	ReplacerCapacity int
+	DBPath                 string
+	LSMDataDir             string
+	WALPath                string
+	BufferPoolSize         int
+	ReplacerCapacity       int
+	ReplicationConfig      synchronization.ReplicationConfig
+	ReplicationCoordinator synchronization.ReplicationCoordinator
 }
 
 // Engine provides a small, opinionated database entry point.
 // It prefers MVCC transaction handling with an LSM-tree storage backend.
 type Engine struct {
-	storageEngine storage.IStorageEngine
-	lsmDataDir    string
-	isolationMgr  txn.IIsolationManager
-	bufferPool    buffer.IBufferPoolManager
-	diskMgr       *buffer.DiskManager
-	walMgr        log.ILogManager
-	schemaManager *schema.SchemaManager
-	indexManagers map[string]*schema.SecondaryIndexManager
-	tableEngines  map[string]storage.IStorageEngine
-	rollbackMgr   *rollback.RollbackManager
-	mu            sync.RWMutex
+	storageEngine     storage.IStorageEngine
+	lsmDataDir        string
+	replicationConfig synchronization.ReplicationConfig
+	replicator        synchronization.ReplicationCoordinator
+	isolationMgr      txn.IIsolationManager
+	bufferPool        buffer.IBufferPoolManager
+	diskMgr           *buffer.DiskManager
+	walMgr            log.ILogManager
+	schemaManager     *schema.SchemaManager
+	indexManagers     map[string]*schema.SecondaryIndexManager
+	tableEngines      map[string]storage.IStorageEngine
+	rollbackMgr       *rollback.RollbackManager
+	mu                sync.RWMutex
 }
 
 var _ Database = (*Engine)(nil)
@@ -69,6 +74,44 @@ func OpenMVCCLSM(opts Options) (_ *Engine, err error) {
 	if opts.ReplacerCapacity <= 0 {
 		opts.ReplacerCapacity = DefaultReplacerCapacity
 	}
+
+	replicationConfig := opts.ReplicationConfig
+	if replicationConfig.Strategy == "" {
+		replicationConfig = synchronization.DefaultReplicationConfig()
+	}
+	if replicationConfig.Backend == "" {
+		replicationConfig.Backend = synchronization.ReplicationBackendNoop
+	}
+	if err := replicationConfig.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid replication config: %w", err)
+	}
+
+	replicator := opts.ReplicationCoordinator
+	if replicator == nil {
+		replicator, err = synchronization.NewReplicationCoordinatorFromConfig(replicationConfig)
+		if err != nil {
+			return nil, fmt.Errorf("resolve replication coordinator: %w", err)
+		}
+	}
+	if err := replicator.Configure(replicationConfig); err != nil {
+		return nil, fmt.Errorf("configure replication coordinator: %w", err)
+	}
+	if raftReplicator, ok := replicator.(*synchronization.RaftReplicationCoordinator); ok {
+		localNode := replicationConfig.LocalNodeID
+		leaderNode := replicationConfig.LeaderNodeID
+		term := replicationConfig.CurrentTerm
+		if localNode != "" {
+			if term == 0 {
+				term = 1
+			}
+			raftReplicator.SetLeadership(localNode, leaderNode, term)
+		}
+	}
+	defer func() {
+		if err != nil && replicator != nil {
+			_ = replicator.Close()
+		}
+	}()
 
 	diskMgr, err := buffer.NewDiskManager(opts.DBPath)
 	if err != nil {
@@ -105,16 +148,18 @@ func OpenMVCCLSM(opts Options) (_ *Engine, err error) {
 	)
 
 	engine := &Engine{
-		storageEngine: storageEngine,
-		lsmDataDir:    opts.LSMDataDir,
-		isolationMgr:  isolationMgr,
-		bufferPool:    bufferPool,
-		diskMgr:       diskMgr,
-		walMgr:        walMgr,
-		schemaManager: schema.NewSchemaManager(storageEngine),
-		indexManagers: indexManagers,
-		tableEngines:  tableEngines,
-		rollbackMgr:   rollbackMgr,
+		storageEngine:     storageEngine,
+		lsmDataDir:        opts.LSMDataDir,
+		replicationConfig: replicationConfig,
+		replicator:        replicator,
+		isolationMgr:      isolationMgr,
+		bufferPool:        bufferPool,
+		diskMgr:           diskMgr,
+		walMgr:            walMgr,
+		schemaManager:     schema.NewSchemaManager(storageEngine),
+		indexManagers:     indexManagers,
+		tableEngines:      tableEngines,
+		rollbackMgr:       rollbackMgr,
 	}
 
 	if tableNames, err := engine.schemaManager.LoadAllSchemas(); err != nil {
@@ -207,6 +252,11 @@ func (e *Engine) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	if e.replicator != nil {
+		if err := e.replicator.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if e.bufferPool != nil {
 		if err := e.bufferPool.Close(); err != nil {
 			errs = append(errs, err)
@@ -221,6 +271,14 @@ func (e *Engine) StorageEngine() storage.IStorageEngine {
 
 func (e *Engine) TableStorageEngine(tableName string) storage.IStorageEngine {
 	return e.tableStorageEngine(tableName)
+}
+
+func (e *Engine) ReplicationCoordinator() synchronization.ReplicationCoordinator {
+	return e.replicator
+}
+
+func (e *Engine) ReplicationConfig() synchronization.ReplicationConfig {
+	return e.replicationConfig
 }
 
 func (e *Engine) BufferPoolManager() buffer.IBufferPoolManager {
@@ -252,6 +310,11 @@ func (e *Engine) BeginTransaction(isolationLevel uint8, tableName string, tableS
 }
 
 func (e *Engine) Read(txnID int64, key []byte) ([]byte, error) {
+	if e.replicator != nil {
+		if err := e.replicator.SynchronizeRead(context.Background(), txnID, key); err != nil {
+			return nil, fmt.Errorf("replication read sync failed: %w", err)
+		}
+	}
 	return e.isolationMgr.Read(txnID, key)
 }
 
@@ -284,19 +347,75 @@ func (e *Engine) Scan(lower []byte, upper []byte) ([]storage.ScanEntry, error) {
 }
 
 func (e *Engine) Write(txnID int64, key []byte, value []byte) error {
-	return e.isolationMgr.Write(txnID, key, value)
+	if err := e.isolationMgr.Write(txnID, key, value); err != nil {
+		return err
+	}
+	if e.replicator != nil {
+		if err := e.replicator.ReplicateWrite(context.Background(), txnID, key, value); err != nil {
+			return fmt.Errorf("replication write failed: %w", err)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) Delete(txnID int64, key []byte) error {
-	return e.isolationMgr.Delete(txnID, key)
+	if err := e.isolationMgr.Delete(txnID, key); err != nil {
+		return err
+	}
+	if e.replicator != nil {
+		if err := e.replicator.ReplicateDelete(context.Background(), txnID, key); err != nil {
+			return fmt.Errorf("replication delete failed: %w", err)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) Commit(txnID int64) error {
-	return e.isolationMgr.Commit(txnID)
+	if err := e.isolationMgr.Commit(txnID); err != nil {
+		if e.replicator != nil {
+			_ = e.replicator.Abort(context.Background(), txnID)
+		}
+		return err
+	}
+	if e.replicator != nil {
+		if err := e.replicator.Commit(context.Background(), txnID); err != nil {
+			return fmt.Errorf("replication commit failed: %w", err)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) Abort(txnID int64) error {
-	return e.isolationMgr.Abort(txnID)
+	localErr := e.isolationMgr.Abort(txnID)
+	var replicationErr error
+	if e.replicator != nil {
+		replicationErr = e.replicator.Abort(context.Background(), txnID)
+	}
+	return errors.Join(localErr, replicationErr)
+}
+
+func (e *Engine) UpdateRaftLeadership(localNodeID string, leaderNodeID string, term uint64) error {
+	if e == nil {
+		return fmt.Errorf("engine is nil")
+	}
+	raftReplicator, ok := e.replicator.(*synchronization.RaftReplicationCoordinator)
+	if !ok {
+		return fmt.Errorf("raft leadership update rejected: replication strategy is %q", e.replicationConfig.Strategy)
+	}
+	if err := raftReplicator.UpdateLeadership(localNodeID, leaderNodeID, term); err != nil {
+		return err
+	}
+
+	e.mu.Lock()
+	if localNodeID != "" {
+		e.replicationConfig.LocalNodeID = localNodeID
+	}
+	e.replicationConfig.LeaderNodeID = leaderNodeID
+	if term > 0 {
+		e.replicationConfig.CurrentTerm = term
+	}
+	e.mu.Unlock()
+	return nil
 }
 
 func (e *Engine) CreateTable(tableSchema *schema.TableSchema) error {

@@ -1,0 +1,17 @@
+.git
+.gitignore
+.github
+.vscode
+.idea
+bin
+cmd/maelstrom/store
+coverage.*
+*.prof
+*.db
+*.wal
+lsm_data
+debug_test.db
+test.db
+test.wal
+omag
+

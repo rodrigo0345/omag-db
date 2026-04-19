@@ -80,6 +80,9 @@ func (mh *MVCCWriteHandler) HandleWrite(txn *txn_unit.Transaction, writeOp Write
 		txn.RecordRecoveryOperation(writeOp.TableName, log.DELETE, writeOp.Key, nil)
 		if mh.logManager != nil {
 			mh.logManager.AddTransactionOperation(txn.GetID(), writeOp.TableName, log.DELETE, writeOp.Key, nil)
+			if intentLogger, ok := mh.logManager.(log.ReplicationIntentLogger); ok {
+				intentLogger.LogReplicationIntent(txn.GetID(), writeOp.TableName, log.DELETE, writeOp.Key, nil)
+			}
 		}
 	} else {
 		if err := mh.storageEngine.Put(writeOp.Key, writeOp.Value); err != nil {
@@ -89,6 +92,9 @@ func (mh *MVCCWriteHandler) HandleWrite(txn *txn_unit.Transaction, writeOp Write
 		txn.RecordRecoveryOperation(writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
 		if mh.logManager != nil {
 			mh.logManager.AddTransactionOperation(txn.GetID(), writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
+			if intentLogger, ok := mh.logManager.(log.ReplicationIntentLogger); ok {
+				intentLogger.LogReplicationIntent(txn.GetID(), writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
+			}
 		}
 
 		if mh.indexManager != nil && mh.tableSchema != nil {
