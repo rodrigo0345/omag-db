@@ -13,3 +13,6 @@ cmd/maelstrom/.bin
 cmd/maelstrom/store
 cmd/maelstrom/maelstrom
 cmd/maelstrom/node*
+
+lsm_data**
+**/lsm_data**
