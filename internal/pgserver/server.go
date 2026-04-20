@@ -1,7 +1,9 @@
 package pgserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +24,8 @@ import (
 )
 
 const (
-	pgTextOID uint32 = 25
+	pgTextOID         uint32 = 25
+	rowPayloadPrefix          = "OMAGROW1"
 )
 
 var (
@@ -43,15 +46,18 @@ var (
 )
 
 type Server struct {
-	db database.Database
+	db                       database.Database
+	enablePrimaryKeyFastPath bool
+	cacheMu                  sync.RWMutex
+	tableSchemaCache         map[string]*schema.TableSchema
 }
 
 type connSession struct {
-	inTransaction bool
-	txnID         int64
-	txnTableName  string
+	inTransaction  bool
+	txnID          int64
+	txnTableName   string
 	txnTableSchema *schema.TableSchema
-	status        byte
+	status         byte
 }
 
 type statementResult struct {
@@ -60,7 +66,7 @@ type statementResult struct {
 }
 
 func New(db database.Database) *Server {
-	return &Server{db: db}
+	return &Server{db: db, enablePrimaryKeyFastPath: true, tableSchemaCache: make(map[string]*schema.TableSchema)}
 }
 
 func (s *Server) ListenAndServe(addr string) error {
@@ -417,6 +423,7 @@ func (s *Server) execCreateTable(stmt string) (statementResult, error) {
 	if err := s.db.CreateTable(tableSchema); err != nil {
 		return statementResult{}, err
 	}
+	s.storeTableSchema(tableName, tableSchema)
 
 	return statementResult{messages: []pgproto3.BackendMessage{&pgproto3.CommandComplete{CommandTag: []byte("CREATE TABLE")}}}, nil
 }
@@ -430,6 +437,7 @@ func (s *Server) execDropTable(stmt string) (statementResult, error) {
 	if err := s.db.DropTable(normalizeIdent(m[1])); err != nil {
 		return statementResult{}, err
 	}
+	s.dropTableSchema(normalizeIdent(m[1]))
 	return statementResult{messages: []pgproto3.BackendMessage{&pgproto3.CommandComplete{CommandTag: []byte("DROP TABLE")}}}, nil
 }
 
@@ -456,6 +464,9 @@ func (s *Server) execCreateIndex(stmt string) (statementResult, error) {
 	}
 	if err := s.db.CreateIndex(tableName, indexName, indexType, cols, isUnique); err != nil {
 		return statementResult{}, err
+	}
+	if ts, err := s.getTableSchema(tableName); err == nil {
+		s.storeTableSchema(tableName, ts)
 	}
 
 	return statementResult{messages: []pgproto3.BackendMessage{&pgproto3.CommandComplete{CommandTag: []byte("CREATE INDEX")}}, status: 'I'}, nil
@@ -489,7 +500,7 @@ func (s *Server) execInsert(sess *connSession, stmt string) (statementResult, er
 	}
 
 	tableName := normalizeIdent(m[1])
-	tableSchema, err := s.db.GetTableSchema(tableName)
+	tableSchema, err := s.getTableSchema(tableName)
 	if err != nil {
 		return statementResult{}, err
 	}
@@ -510,16 +521,30 @@ func (s *Server) execInsert(sess *connSession, stmt string) (statementResult, er
 		return statementResult{}, fmt.Errorf("column/value count mismatch")
 	}
 
+	engine := s.db.TableStorageEngine(tableName)
+	if engine == nil {
+		return statementResult{}, fmt.Errorf("table %q not found", tableName)
+	}
+	pkIdx := indexOfColumn(cols, tableSchema.PrimaryKey)
+	if len(cols) == len(tableSchema.ColumnList) && columnsMatchNormalized(cols, tableSchema.ColumnList) {
+		if pkIdx < 0 {
+			return statementResult{}, fmt.Errorf("primary key %q must be included", tableSchema.PrimaryKey)
+		}
+		pkValue := values[pkIdx]
+		if _, err := engine.Get([]byte(pkValue)); err == nil {
+			return statementResult{}, fmt.Errorf("duplicate primary key value %q", pkValue)
+		}
+		if err := s.writeOrderedRow(sess, tableName, tableSchema, values); err != nil {
+			return statementResult{}, err
+		}
+		return statementResult{messages: []pgproto3.BackendMessage{&pgproto3.CommandComplete{CommandTag: []byte("INSERT 0 1")}}}, nil
+	}
 	row := make(map[string]string, len(cols))
 	for i, col := range cols {
 		row[normalizeIdent(col)] = values[i]
 	}
 	if _, ok := row[tableSchema.PrimaryKey]; !ok {
 		return statementResult{}, fmt.Errorf("primary key %q must be included", tableSchema.PrimaryKey)
-	}
-	engine := s.db.TableStorageEngine(tableName)
-	if engine == nil {
-		return statementResult{}, fmt.Errorf("table %q not found", tableName)
 	}
 	if _, err := engine.Get([]byte(row[tableSchema.PrimaryKey])); err == nil {
 		return statementResult{}, fmt.Errorf("duplicate primary key value %q", row[tableSchema.PrimaryKey])
@@ -538,7 +563,7 @@ func (s *Server) execUpdate(sess *connSession, stmt string) (statementResult, er
 	}
 
 	tableName := normalizeIdent(m[1])
-	tableSchema, err := s.db.GetTableSchema(tableName)
+	tableSchema, err := s.getTableSchema(tableName)
 	if err != nil {
 		return statementResult{}, err
 	}
@@ -567,7 +592,7 @@ func (s *Server) execDelete(sess *connSession, stmt string) (statementResult, er
 	}
 
 	tableName := normalizeIdent(m[1])
-	tableSchema, err := s.db.GetTableSchema(tableName)
+	tableSchema, err := s.getTableSchema(tableName)
 	if err != nil {
 		return statementResult{}, err
 	}
@@ -580,12 +605,73 @@ func (s *Server) execDelete(sess *connSession, stmt string) (statementResult, er
 		}
 	}
 
+	if s.enablePrimaryKeyFastPath && len(whereMap) == 1 {
+		if pkValue, ok := whereMap[tableSchema.PrimaryKey]; ok {
+			count, err := s.deleteRowByPrimaryKey(sess, tableName, tableSchema, pkValue)
+			if err != nil {
+				return statementResult{}, err
+			}
+			return statementResult{messages: []pgproto3.BackendMessage{&pgproto3.CommandComplete{CommandTag: []byte(fmt.Sprintf("DELETE %d", count))}}}, nil
+		}
+	}
+
 	count, err := s.deleteRows(sess, tableName, tableSchema, whereMap)
 	if err != nil {
 		return statementResult{}, err
 	}
 
 	return statementResult{messages: []pgproto3.BackendMessage{&pgproto3.CommandComplete{CommandTag: []byte(fmt.Sprintf("DELETE %d", count))}}}, nil
+}
+
+func (s *Server) deleteRowByPrimaryKey(sess *connSession, tableName string, tableSchema *schema.TableSchema, primaryKeyValue string) (count int, err error) {
+	engine := s.db.TableStorageEngine(tableName)
+	if engine == nil {
+		return 0, fmt.Errorf("table %q not found", tableName)
+	}
+	if _, getErr := engine.Get([]byte(primaryKeyValue)); getErr != nil {
+		return 0, nil
+	}
+
+	txnID, started, err := s.beginMutationTxn(sess, tableName, tableSchema)
+	if err != nil {
+		return 0, err
+	}
+	if sess != nil && sess.inTransaction && sess.txnID == 0 {
+		sess.txnID = txnID
+		sess.txnTableName = tableName
+		sess.txnTableSchema = tableSchema
+	}
+
+	defer func() {
+		if err != nil {
+			if abortErr := s.db.Abort(txnID); abortErr != nil {
+				err = errors.Join(err, abortErr)
+			}
+			if sess != nil && sess.inTransaction {
+				sess.inTransaction = false
+				sess.txnID = 0
+				sess.txnTableName = ""
+				sess.txnTableSchema = nil
+			}
+			return
+		}
+
+		if started && (sess == nil || !sess.inTransaction) {
+			if commitErr := s.db.Commit(txnID); commitErr != nil {
+				if abortErr := s.db.Abort(txnID); abortErr != nil {
+					err = errors.Join(commitErr, abortErr)
+					return
+				}
+				err = commitErr
+			}
+		}
+	}()
+
+	if err = s.db.Delete(txnID, []byte(primaryKeyValue)); err != nil {
+		return 0, err
+	}
+
+	return 1, nil
 }
 
 func (s *Server) execSelect(stmt string) (statementResult, error) {
@@ -596,7 +682,7 @@ func (s *Server) execSelect(stmt string) (statementResult, error) {
 
 	columnExpr := strings.TrimSpace(m[1])
 	tableName := normalizeIdent(m[2])
-	tableSchema, err := s.db.GetTableSchema(tableName)
+	tableSchema, err := s.getTableSchema(tableName)
 	if err != nil {
 		return statementResult{}, err
 	}
@@ -606,19 +692,42 @@ func (s *Server) execSelect(stmt string) (statementResult, error) {
 		return statementResult{}, err
 	}
 
+	whereMap := map[string]string{}
+	if strings.TrimSpace(m[3]) != "" {
+		whereMap, err = parseWhereClause(m[3])
+		if err != nil {
+			return statementResult{}, err
+		}
+	}
+
+	if row, found, fastPath, err := s.readRowByPrimaryKey(tableName, tableSchema, whereMap); err != nil {
+		return statementResult{}, err
+	} else if fastPath {
+		rows := make([]map[string]string, 0, 1)
+		if found {
+			rows = append(rows, row)
+		}
+		return buildSelectResult(cols, rows), nil
+	}
+
+	if len(whereMap) > 0 {
+		rows, err := s.scanRows(tableName, tableSchema)
+		if err != nil {
+			return statementResult{}, err
+		}
+		rows = filterRows(rows, whereMap)
+		return buildSelectResult(cols, rows), nil
+	}
+
 	rows, err := s.readRows(tableName, tableSchema)
 	if err != nil {
 		return statementResult{}, err
 	}
 
-	if strings.TrimSpace(m[3]) != "" {
-		whereMap, err := parseWhereClause(m[3])
-		if err != nil {
-			return statementResult{}, err
-		}
-		rows = filterRows(rows, whereMap)
-	}
+	return buildSelectResult(cols, rows), nil
+}
 
+func buildSelectResult(cols []string, rows []map[string]string) statementResult {
 	fields := make([]pgproto3.FieldDescription, len(cols))
 	for i, col := range cols {
 		fields[i] = pgproto3.FieldDescription{
@@ -630,7 +739,8 @@ func (s *Server) execSelect(stmt string) (statementResult, error) {
 		}
 	}
 
-	messages := []pgproto3.BackendMessage{&pgproto3.RowDescription{Fields: fields}}
+	messages := make([]pgproto3.BackendMessage, 0, len(rows)+2)
+	messages = append(messages, &pgproto3.RowDescription{Fields: fields})
 	for _, row := range rows {
 		values := make([][]byte, len(cols))
 		for i, col := range cols {
@@ -639,7 +749,36 @@ func (s *Server) execSelect(stmt string) (statementResult, error) {
 		messages = append(messages, &pgproto3.DataRow{Values: values})
 	}
 	messages = append(messages, &pgproto3.CommandComplete{CommandTag: []byte(fmt.Sprintf("SELECT %d", len(rows)))})
-	return statementResult{messages: messages}, nil
+	return statementResult{messages: messages}
+}
+
+func (s *Server) readRowByPrimaryKey(tableName string, tableSchema *schema.TableSchema, whereMap map[string]string) (row map[string]string, found bool, fastPath bool, err error) {
+	if tableSchema == nil || len(whereMap) != 1 {
+		return nil, false, false, nil
+	}
+	pkValue, ok := whereMap[tableSchema.PrimaryKey]
+	if !ok {
+		return nil, false, false, nil
+	}
+
+	engine := s.db.TableStorageEngine(tableName)
+	if engine == nil {
+		return nil, false, true, fmt.Errorf("table %q not found", tableName)
+	}
+
+	payload, getErr := engine.Get([]byte(pkValue))
+	if getErr != nil {
+		return nil, false, true, nil
+	}
+
+	decoded, decErr := decodeRow(payload, tableSchema)
+	if decErr != nil {
+		return nil, false, true, decErr
+	}
+	if _, exists := decoded[tableSchema.PrimaryKey]; !exists {
+		decoded[tableSchema.PrimaryKey] = pkValue
+	}
+	return decoded, true, true, nil
 }
 
 func (s *Server) execLiteralSelect(stmt string) (statementResult, error) {
@@ -716,6 +855,21 @@ func (s *Server) resolveSelectColumns(tableSchema *schema.TableSchema, expr stri
 }
 
 func (s *Server) readRows(tableName string, tableSchema *schema.TableSchema) ([]map[string]string, error) {
+	rows, err := s.scanRows(tableName, tableSchema)
+	if err != nil {
+		return nil, err
+	}
+	pkType := schema.DataTypeString
+	if colType, err := tableSchema.ColumnDataType(tableSchema.PrimaryKey); err == nil {
+		pkType = colType
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return compareRowValues(rows[i][tableSchema.PrimaryKey], rows[j][tableSchema.PrimaryKey], pkType) < 0
+	})
+	return rows, nil
+}
+
+func (s *Server) scanRows(tableName string, tableSchema *schema.TableSchema) ([]map[string]string, error) {
 	engine := s.db.TableStorageEngine(tableName)
 	if engine == nil {
 		return nil, fmt.Errorf("table %q not found", tableName)
@@ -728,7 +882,7 @@ func (s *Server) readRows(tableName string, tableSchema *schema.TableSchema) ([]
 
 	rows := make([]map[string]string, 0, len(entries))
 	for _, entry := range entries {
-		row, err := decodeRow(entry.Value)
+		row, err := decodeRow(entry.Value, tableSchema)
 		if err != nil {
 			return nil, err
 		}
@@ -737,14 +891,44 @@ func (s *Server) readRows(tableName string, tableSchema *schema.TableSchema) ([]
 		}
 		rows = append(rows, row)
 	}
-	pkType := schema.DataTypeString
-	if colType, err := tableSchema.ColumnDataType(tableSchema.PrimaryKey); err == nil {
-		pkType = colType
-	}
-	sort.Slice(rows, func(i, j int) bool {
-		return compareRowValues(rows[i][tableSchema.PrimaryKey], rows[j][tableSchema.PrimaryKey], pkType) < 0
-	})
 	return rows, nil
+}
+
+func (s *Server) getTableSchema(tableName string) (*schema.TableSchema, error) {
+	s.cacheMu.RLock()
+	if ts, ok := s.tableSchemaCache[tableName]; ok && ts != nil {
+		s.cacheMu.RUnlock()
+		return ts, nil
+	}
+	s.cacheMu.RUnlock()
+
+	ts, err := s.db.GetTableSchema(tableName)
+	if err != nil {
+		return nil, err
+	}
+	s.storeTableSchema(tableName, ts)
+	return ts, nil
+}
+
+func (s *Server) storeTableSchema(tableName string, ts *schema.TableSchema) {
+	if tableName == "" || ts == nil {
+		return
+	}
+	s.cacheMu.Lock()
+	if s.tableSchemaCache == nil {
+		s.tableSchemaCache = make(map[string]*schema.TableSchema)
+	}
+	s.tableSchemaCache[tableName] = ts
+	s.cacheMu.Unlock()
+}
+
+func (s *Server) dropTableSchema(tableName string) {
+	if tableName == "" {
+		return
+	}
+	s.cacheMu.Lock()
+	delete(s.tableSchemaCache, tableName)
+	s.cacheMu.Unlock()
 }
 
 func (s *Server) writeRow(sess *connSession, tableName string, tableSchema *schema.TableSchema, row map[string]string) (err error) {
@@ -787,7 +971,7 @@ func (s *Server) writeRow(sess *connSession, tableName string, tableSchema *sche
 		}
 	}()
 
-	payload, marshalErr := json.Marshal(row)
+	payload, marshalErr := encodeRowPayload(tableSchema, row)
 	if marshalErr != nil {
 		return marshalErr
 	}
@@ -797,9 +981,131 @@ func (s *Server) writeRow(sess *connSession, tableName string, tableSchema *sche
 	return nil
 }
 
+func (s *Server) writeOrderedRow(sess *connSession, tableName string, tableSchema *schema.TableSchema, values []string) (err error) {
+	if tableSchema == nil {
+		return fmt.Errorf("table schema is nil")
+	}
+	if len(values) != len(tableSchema.ColumnList) {
+		return fmt.Errorf("column/value count mismatch")
+	}
+	pkIdx := indexOfColumn(tableSchema.ColumnList, tableSchema.PrimaryKey)
+	if pkIdx < 0 {
+		return fmt.Errorf("primary key %q must be included", tableSchema.PrimaryKey)
+	}
+
+	txnID, started, err := s.beginMutationTxn(sess, tableName, tableSchema)
+	if err != nil {
+		return err
+	}
+	if sess != nil && sess.inTransaction && sess.txnID == 0 {
+		sess.txnID = txnID
+		sess.txnTableName = tableName
+		sess.txnTableSchema = tableSchema
+	}
+
+	defer func() {
+		if err != nil {
+			if abortErr := s.db.Abort(txnID); abortErr != nil {
+				err = errors.Join(err, abortErr)
+			}
+			if sess != nil && sess.inTransaction {
+				sess.inTransaction = false
+				sess.txnID = 0
+				sess.txnTableName = ""
+				sess.txnTableSchema = nil
+			}
+			return
+		}
+
+		if started && (sess == nil || !sess.inTransaction) {
+			if commitErr := s.db.Commit(txnID); commitErr != nil {
+				if abortErr := s.db.Abort(txnID); abortErr != nil {
+					err = errors.Join(commitErr, abortErr)
+					return
+				}
+				err = commitErr
+			}
+		}
+	}()
+
+	payload, payloadErr := encodeRowPayloadOrdered(tableSchema, values)
+	if payloadErr != nil {
+		return payloadErr
+	}
+	if err = s.db.Write(txnID, []byte(values[pkIdx]), payload); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) updateRowByPrimaryKey(sess *connSession, tableName string, tableSchema *schema.TableSchema, whereMap, setMap map[string]string) (count int, err error) {
+	row, found, fastPath, err := s.readRowByPrimaryKey(tableName, tableSchema, whereMap)
+	if err != nil {
+		return 0, err
+	}
+	if !fastPath || !found {
+		return 0, nil
+	}
+
+	for col, val := range setMap {
+		if _, ok := tableSchema.Columns[col]; !ok {
+			return 0, fmt.Errorf("column %q does not exist", col)
+		}
+		row[col] = val
+	}
+
+	txnID, started, err := s.beginMutationTxn(sess, tableName, tableSchema)
+	if err != nil {
+		return 0, err
+	}
+	if sess != nil && sess.inTransaction && sess.txnID == 0 {
+		sess.txnID = txnID
+		sess.txnTableName = tableName
+		sess.txnTableSchema = tableSchema
+	}
+	defer func() {
+		if err != nil {
+			if abortErr := s.db.Abort(txnID); abortErr != nil {
+				err = errors.Join(err, abortErr)
+			}
+			if sess != nil && sess.inTransaction {
+				sess.inTransaction = false
+				sess.txnID = 0
+				sess.txnTableName = ""
+				sess.txnTableSchema = nil
+			}
+			return
+		}
+
+		if started && (sess == nil || !sess.inTransaction) {
+			if commitErr := s.db.Commit(txnID); commitErr != nil {
+				if abortErr := s.db.Abort(txnID); abortErr != nil {
+					err = errors.Join(commitErr, abortErr)
+					return
+				}
+				err = commitErr
+			}
+		}
+	}()
+
+	payload, marshalErr := encodeRowPayload(tableSchema, row)
+	if marshalErr != nil {
+		return 0, marshalErr
+	}
+	if err = s.db.Write(txnID, []byte(row[tableSchema.PrimaryKey]), payload); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
 func (s *Server) updateRows(sess *connSession, tableName string, tableSchema *schema.TableSchema, setMap, whereMap map[string]string) (count int, err error) {
 	if _, updatesPrimaryKey := setMap[tableSchema.PrimaryKey]; updatesPrimaryKey {
 		return 0, fmt.Errorf("updating primary key %q is not supported", tableSchema.PrimaryKey)
+	}
+	if s.enablePrimaryKeyFastPath && len(whereMap) == 1 {
+		if _, ok := whereMap[tableSchema.PrimaryKey]; ok {
+			return s.updateRowByPrimaryKey(sess, tableName, tableSchema, whereMap, setMap)
+		}
 	}
 
 	rows, err := s.readRows(tableName, tableSchema)
@@ -851,7 +1157,7 @@ func (s *Server) updateRows(sess *connSession, tableName string, tableSchema *sc
 			}
 			row[col] = val
 		}
-		payload, marshalErr := json.Marshal(row)
+		payload, marshalErr := encodeRowPayload(tableSchema, row)
 		if marshalErr != nil {
 			return 0, marshalErr
 		}
@@ -865,6 +1171,12 @@ func (s *Server) updateRows(sess *connSession, tableName string, tableSchema *sc
 }
 
 func (s *Server) deleteRows(sess *connSession, tableName string, tableSchema *schema.TableSchema, whereMap map[string]string) (count int, err error) {
+	if s.enablePrimaryKeyFastPath && len(whereMap) == 1 {
+		if pkValue, ok := whereMap[tableSchema.PrimaryKey]; ok {
+			return s.deleteRowByPrimaryKey(sess, tableName, tableSchema, pkValue)
+		}
+	}
+
 	rows, err := s.readRows(tableName, tableSchema)
 	if err != nil {
 		return 0, err
@@ -1283,8 +1595,82 @@ func parseDataType(token string) schema.DataType {
 	}
 }
 
+func encodeRowPayload(tableSchema *schema.TableSchema, row map[string]string) ([]byte, error) {
+	if tableSchema == nil {
+		return json.Marshal(row)
+	}
 
-func decodeRow(data []byte) (map[string]string, error) {
+	buf := make([]byte, 0, len(tableSchema.ColumnList)*16+16)
+	buf = append(buf, rowPayloadPrefix...)
+	buf = appendUint16(buf, uint16(len(tableSchema.ColumnList)))
+	for _, col := range tableSchema.ColumnList {
+		val, ok := row[col]
+		if !ok {
+			buf = append(buf, 0)
+			continue
+		}
+		buf = append(buf, 1)
+		buf = appendUint32(buf, uint32(len(val)))
+		buf = append(buf, val...)
+	}
+	return buf, nil
+}
+
+func encodeRowPayloadOrdered(tableSchema *schema.TableSchema, values []string) ([]byte, error) {
+	if tableSchema == nil {
+		return nil, fmt.Errorf("table schema is nil")
+	}
+	if len(values) != len(tableSchema.ColumnList) {
+		return nil, fmt.Errorf("column/value count mismatch")
+	}
+
+	buf := make([]byte, 0, len(values)*16+16)
+	buf = append(buf, rowPayloadPrefix...)
+	buf = appendUint16(buf, uint16(len(values)))
+	for _, val := range values {
+		buf = append(buf, 1)
+		buf = appendUint32(buf, uint32(len(val)))
+		buf = append(buf, val...)
+	}
+	return buf, nil
+}
+
+func decodeRow(data []byte, tableSchema *schema.TableSchema) (map[string]string, error) {
+	if tableSchema != nil && bytes.HasPrefix(data, []byte(rowPayloadPrefix)) {
+		offset := len(rowPayloadPrefix)
+		if offset+2 > len(data) {
+			return nil, fmt.Errorf("invalid row payload: truncated header")
+		}
+		colCount := int(binary.LittleEndian.Uint16(data[offset : offset+2]))
+		offset += 2
+		if colCount != len(tableSchema.ColumnList) {
+			return nil, fmt.Errorf("invalid row payload: column count mismatch")
+		}
+
+		row := make(map[string]string, colCount)
+		for _, col := range tableSchema.ColumnList {
+			if offset >= len(data) {
+				return nil, fmt.Errorf("invalid row payload: truncated column flag")
+			}
+			present := data[offset]
+			offset++
+			if present == 0 {
+				continue
+			}
+			if offset+4 > len(data) {
+				return nil, fmt.Errorf("invalid row payload: truncated value length")
+			}
+			valueLen := int(binary.LittleEndian.Uint32(data[offset : offset+4]))
+			offset += 4
+			if offset+valueLen > len(data) {
+				return nil, fmt.Errorf("invalid row payload: truncated value bytes")
+			}
+			row[col] = string(data[offset : offset+valueLen])
+			offset += valueLen
+		}
+		return row, nil
+	}
+
 	var row map[string]string
 	if err := json.Unmarshal(data, &row); err != nil {
 		return nil, err
@@ -1293,5 +1679,38 @@ func decodeRow(data []byte) (map[string]string, error) {
 		row = make(map[string]string)
 	}
 	return row, nil
+}
+
+func appendUint16(dst []byte, v uint16) []byte {
+	var buf [2]byte
+	binary.LittleEndian.PutUint16(buf[:], v)
+	return append(dst, buf[:]...)
+}
+
+func appendUint32(dst []byte, v uint32) []byte {
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], v)
+	return append(dst, buf[:]...)
+}
+
+func columnsMatchNormalized(cols []string, schemaCols []string) bool {
+	if len(cols) != len(schemaCols) {
+		return false
+	}
+	for i := range cols {
+		if normalizeIdent(cols[i]) != normalizeIdent(schemaCols[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func indexOfColumn(cols []string, target string) int {
+	for i, col := range cols {
+		if normalizeIdent(col) == normalizeIdent(target) {
+			return i
+		}
+	}
+	return -1
 }
 

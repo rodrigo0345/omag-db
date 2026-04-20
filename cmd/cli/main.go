@@ -8,11 +8,14 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/rodrigo0345/omag/internal/database"
 	"github.com/rodrigo0345/omag/internal/pgserver"
@@ -37,6 +40,7 @@ func main() {
 	localNodeID := flag.String("replication-local-node-id", "", "local replication node id")
 	peerNodes := flag.String("replication-peer-nodes", "", "comma-separated peer list: nodeA=host:port,nodeB=host:port")
 	grpcListen := flag.String("replication-grpc-listen", "", "address for incoming gRPC replication envelopes, e.g. :7000")
+	pprofListen := flag.String("pprof-listen", "", "optional net/http/pprof listen address, e.g. :6060")
 	debug := flag.Bool("debug", false, "enable debug logs for pgwire server and engine")
 	flag.Parse()
 
@@ -105,6 +109,22 @@ func main() {
 			err := synchronization.ListenAndServeGRPCReplication(ctx, *grpcListen, applier.ApplyEnvelope)
 			if err != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "replication grpc server error: %v\n", err)
+				stop()
+			}
+		}()
+	}
+
+	if strings.TrimSpace(*pprofListen) != "" {
+		pprofServer := &http.Server{Addr: strings.TrimSpace(*pprofListen), Handler: http.DefaultServeMux}
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = pprofServer.Shutdown(shutdownCtx)
+		}()
+		go func() {
+			if err := pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				_, _ = fmt.Fprintf(os.Stderr, "pprof server error: %v\n", err)
 				stop()
 			}
 		}()

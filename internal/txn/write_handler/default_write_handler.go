@@ -19,6 +19,7 @@ type DefaultWriteHandler struct {
 	bufferManager   buffer.IBufferPoolManager
 	indexManager    *schema.SecondaryIndexManager
 	tableSchema     *schema.TableSchema
+	replicationIntentEnabled bool
 }
 
 func NewDefaultWriteHandler(
@@ -32,7 +33,12 @@ func NewDefaultWriteHandler(
 		rollbackManager: rollbackMgr,
 		bufferManager:   bufferMgr,
 		logManager:      logMgr,
+		replicationIntentEnabled: true,
 	}
+}
+
+func (dh *DefaultWriteHandler) SetReplicationIntentEnabled(enabled bool) {
+	dh.replicationIntentEnabled = enabled
 }
 
 func (dh *DefaultWriteHandler) SetStorageResolver(resolver func(tableName string) storage.IStorageEngine) {
@@ -49,19 +55,14 @@ func (dh *DefaultWriteHandler) resolveStorageEngine(tableName string) storage.IS
 }
 
 func (dh *DefaultWriteHandler) HandleWrite(txn *txn_unit.Transaction, writeOp WriteOperation) error {
-	var beforeImage []byte
-	var err error
 	storageEngine := dh.resolveStorageEngine(writeOp.TableName)
 	if storageEngine == nil {
 		return fmt.Errorf("storage engine is nil")
 	}
 
-	if !writeOp.IsDelete {
-		beforeImage, err = storageEngine.Get(writeOp.Key)
-		if err != nil {
-			beforeImage = nil
-		}
-	} else {
+	var beforeImage []byte
+	if writeOp.IsDelete {
+		var err error
 		beforeImage, err = storageEngine.Get(writeOp.Key)
 		if err != nil {
 			return fmt.Errorf("failed to get value before delete: %w", err)
@@ -109,8 +110,10 @@ func (dh *DefaultWriteHandler) HandleWrite(txn *txn_unit.Transaction, writeOp Wr
 		txn.RecordRecoveryOperation(writeOp.TableName, log.DELETE, writeOp.Key, nil)
 		if dh.logManager != nil {
 			dh.logManager.AddTransactionOperation(txn.GetID(), writeOp.TableName, log.DELETE, writeOp.Key, nil)
-			if intentLogger, ok := dh.logManager.(log.ReplicationIntentLogger); ok {
-				intentLogger.LogReplicationIntent(txn.GetID(), writeOp.TableName, log.DELETE, writeOp.Key, nil)
+			if dh.replicationIntentEnabled {
+				if intentLogger, ok := dh.logManager.(log.ReplicationIntentLogger); ok {
+					intentLogger.LogReplicationIntent(txn.GetID(), writeOp.TableName, log.DELETE, writeOp.Key, nil)
+				}
 			}
 		}
 	} else {
@@ -121,8 +124,10 @@ func (dh *DefaultWriteHandler) HandleWrite(txn *txn_unit.Transaction, writeOp Wr
 		txn.RecordRecoveryOperation(writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
 		if dh.logManager != nil {
 			dh.logManager.AddTransactionOperation(txn.GetID(), writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
-			if intentLogger, ok := dh.logManager.(log.ReplicationIntentLogger); ok {
-				intentLogger.LogReplicationIntent(txn.GetID(), writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
+			if dh.replicationIntentEnabled {
+				if intentLogger, ok := dh.logManager.(log.ReplicationIntentLogger); ok {
+					intentLogger.LogReplicationIntent(txn.GetID(), writeOp.TableName, log.PUT, writeOp.Key, writeOp.Value)
+				}
 			}
 		}
 

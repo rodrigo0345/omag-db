@@ -130,6 +130,9 @@ func (l *LSMTreeBackend) Get(key []byte) ([]byte, error) {
 			if err == ErrKeyTombstoned {
 				return nil, fmt.Errorf("Key %q has been deleted", string(key))
 			}
+			if err == ErrKeyNotFound {
+				continue
+			}
 			if err == nil {
 				return val, nil
 			}
@@ -661,9 +664,14 @@ func (l *LSMTreeBackend) persistSSTable(sstable *SSTable, id uint64, level int) 
 		return fmt.Errorf("failed to write entry count: %w", err)
 	}
 
-	// Write each key-value pair
-	for key, value := range sstable.data {
-		keyBytes := []byte(key)
+	if len(sstable.sortedRows) != len(sstable.data) {
+		sstable.rebuildSortedRows()
+	}
+
+	// opt: walk contiguous sorted rows for better write-side locality.
+	for i := range sstable.sortedRows {
+		row := sstable.sortedRows[i]
+		keyBytes := []byte(row.key)
 		// Write key length (4 bytes)
 		if err := binary.Write(buf, binary.LittleEndian, uint32(len(keyBytes))); err != nil {
 			return fmt.Errorf("failed to write key length: %w", err)
@@ -673,11 +681,11 @@ func (l *LSMTreeBackend) persistSSTable(sstable *SSTable, id uint64, level int) 
 			return fmt.Errorf("failed to write key: %w", err)
 		}
 		// Write value length (4 bytes)
-		if err := binary.Write(buf, binary.LittleEndian, uint32(len(value))); err != nil {
+		if err := binary.Write(buf, binary.LittleEndian, uint32(len(row.value))); err != nil {
 			return fmt.Errorf("failed to write value length: %w", err)
 		}
 		// Write value
-		if _, err := buf.Write(value); err != nil {
+		if _, err := buf.Write(row.value); err != nil {
 			return fmt.Errorf("failed to write value: %w", err)
 		}
 	}
@@ -828,11 +836,30 @@ func (l *LSMTreeBackend) loadSSTable(dir string, id uint64, level int) error {
 		return fmt.Errorf("failed to read SSTable file: %w", err)
 	}
 
-	buf := bytes.NewReader(fileData)
+	if len(fileData) < 16 {
+		return fmt.Errorf("failed to read SSTable header: file too small")
+	}
 
-	// Read SSTable ID (8 bytes)
-	var readID uint64
-	if err := binary.Read(buf, binary.LittleEndian, &readID); err != nil {
+	offset := 0
+	readU32 := func() (uint32, error) {
+		if offset+4 > len(fileData) {
+			return 0, fmt.Errorf("unexpected EOF while reading uint32")
+		}
+		v := binary.LittleEndian.Uint32(fileData[offset : offset+4])
+		offset += 4
+		return v, nil
+	}
+	readU64 := func() (uint64, error) {
+		if offset+8 > len(fileData) {
+			return 0, fmt.Errorf("unexpected EOF while reading uint64")
+		}
+		v := binary.LittleEndian.Uint64(fileData[offset : offset+8])
+		offset += 8
+		return v, nil
+	}
+
+	readID, err := readU64()
+	if err != nil {
 		return fmt.Errorf("failed to read SSTable ID: %w", err)
 	}
 
@@ -841,57 +868,52 @@ func (l *LSMTreeBackend) loadSSTable(dir string, id uint64, level int) error {
 	}
 
 	// Read number of entries (8 bytes)
-	var numEntries uint64
-	if err := binary.Read(buf, binary.LittleEndian, &numEntries); err != nil {
+	numEntries, err := readU64()
+	if err != nil {
 		return fmt.Errorf("failed to read entry count: %w", err)
 	}
 
-	// Read key-value pairs
-	data := make(map[string][]byte)
+	// opt: decode rows in one forward pass over bytes for cache-friendly reads.
+	data := make(map[string][]byte, int(numEntries))
 	for i := uint64(0); i < numEntries; i++ {
-		// Read key length (4 bytes)
-		var keyLen uint32
-		if err := binary.Read(buf, binary.LittleEndian, &keyLen); err != nil {
-			return fmt.Errorf("failed to read key length: %w", err)
+		keyLen, readErr := readU32()
+		if readErr != nil {
+			return fmt.Errorf("failed to read key length: %w", readErr)
 		}
-		// Read key
-		keyBytes := make([]byte, keyLen)
-		if _, err := buf.Read(keyBytes); err != nil {
-			return fmt.Errorf("failed to read key: %w", err)
+		if offset+int(keyLen) > len(fileData) {
+			return fmt.Errorf("failed to read key: unexpected EOF")
 		}
-		// Read value length (4 bytes)
-		var valueLen uint32
-		if err := binary.Read(buf, binary.LittleEndian, &valueLen); err != nil {
-			return fmt.Errorf("failed to read value length: %w", err)
+		key := string(fileData[offset : offset+int(keyLen)])
+		offset += int(keyLen)
+
+		valueLen, readErr := readU32()
+		if readErr != nil {
+			return fmt.Errorf("failed to read value length: %w", readErr)
 		}
-		// Read value
-		valueBytes := make([]byte, valueLen)
-		if _, err := buf.Read(valueBytes); err != nil {
-			return fmt.Errorf("failed to read value: %w", err)
+		if offset+int(valueLen) > len(fileData) {
+			return fmt.Errorf("failed to read value: unexpected EOF")
 		}
-		data[string(keyBytes)] = valueBytes
+		valueBytes := append([]byte(nil), fileData[offset:offset+int(valueLen)]...)
+		offset += int(valueLen)
+		data[key] = valueBytes
 	}
 
-	// Read number of tombstones (8 bytes)
-	var numTombstones uint64
-	if err := binary.Read(buf, binary.LittleEndian, &numTombstones); err != nil {
+	numTombstones, err := readU64()
+	if err != nil {
 		return fmt.Errorf("failed to read tombstone count: %w", err)
 	}
 
-	// Read tombstones
-	tombstones := make(map[string]bool)
+	tombstones := make(map[string]bool, int(numTombstones))
 	for i := uint64(0); i < numTombstones; i++ {
-		// Read key length (4 bytes)
-		var keyLen uint32
-		if err := binary.Read(buf, binary.LittleEndian, &keyLen); err != nil {
-			return fmt.Errorf("failed to read tombstone key length: %w", err)
+		keyLen, readErr := readU32()
+		if readErr != nil {
+			return fmt.Errorf("failed to read tombstone key length: %w", readErr)
 		}
-		// Read key
-		keyBytes := make([]byte, keyLen)
-		if _, err := buf.Read(keyBytes); err != nil {
-			return fmt.Errorf("failed to read tombstone key: %w", err)
+		if offset+int(keyLen) > len(fileData) {
+			return fmt.Errorf("failed to read tombstone key: unexpected EOF")
 		}
-		tombstones[string(keyBytes)] = true
+		tombstones[string(fileData[offset:offset+int(keyLen)])] = true
+		offset += int(keyLen)
 	}
 
 	// Create SSTable with rebuilt bloom filter
@@ -900,12 +922,9 @@ func (l *LSMTreeBackend) loadSSTable(dir string, id uint64, level int) error {
 		bf.Add([]byte(key))
 	}
 
-	sstable := &SSTable{
-		id:          readID,
-		data:        data,
-		tombstones:  tombstones,
-		bloomFilter: bf,
-	}
+	sstable := NewSSTable(readID, data, bf)
+	sstable.tombstones = tombstones
+	sstable.rebuildSortedRows()
 
 	// Add to levels
 	l.levelsLock.Lock()

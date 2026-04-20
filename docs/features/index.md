@@ -217,6 +217,10 @@ Trade-offs:
 - Lock batching to reduce overhead
 - Tuple packing to maximize page efficiency
 
+## Benchmark Comparison
+
+For a container-backed performance comparison between OMAG and PostgreSQL, see the [Engine vs PostgreSQL Benchmark](benchmark-comparison.md) report.
+
 ## Configuration Capabilities
 
 Each component offers tuning options:

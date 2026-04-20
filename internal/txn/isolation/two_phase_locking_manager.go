@@ -275,6 +275,10 @@ func (m *TwoPhaseLockingManager) Commit(txnID int64) error {
 			}
 		}
 	}
+
+	m.mu.Lock()
+	delete(m.transactions, TransactionID(txnID))
+	m.mu.Unlock()
 	return nil
 }
 
@@ -305,6 +309,10 @@ func (m *TwoPhaseLockingManager) Abort(txnID int64) error {
 	for _, key := range transaction.GetExclusiveLocks() {
 		m.lockManager.Unlock(transaction, key)
 	}
+
+	m.mu.Lock()
+	delete(m.transactions, TransactionID(txnID))
+	m.mu.Unlock()
 
 	return err
 }

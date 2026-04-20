@@ -23,6 +23,7 @@ nav:
       - Concurrency: architecture/concurrency.md
   - Features:
       - Index: features/index.md
+      - Engine vs PostgreSQL Benchmark: features/benchmark-comparison.md
   - API Reference:
       - Index: api-reference/index.md
       - B+ Tree API: api/btree.md

@@ -44,6 +44,7 @@ type Engine struct {
 	lsmDataDir        string
 	replicationConfig synchronization.ReplicationConfig
 	replicator        synchronization.ReplicationCoordinator
+	replicationEnabled bool
 	isolationMgr      txn.IIsolationManager
 	bufferPool        buffer.IBufferPoolManager
 	diskMgr           *buffer.DiskManager
@@ -135,6 +136,8 @@ func OpenMVCCLSM(opts Options) (_ *Engine, err error) {
 	storageEngine := lsm.NewLSMTreeBackendWithDataDir(walMgr, bufferPool, opts.LSMDataDir)
 	rollbackMgr := rollback.NewRollbackManager(bufferPool)
 	writeHandler := write_handler.NewDefaultWriteHandler(storageEngine, rollbackMgr, bufferPool, walMgr)
+	replicationEnabled := replicationConfig.Backend != synchronization.ReplicationBackendNoop
+	writeHandler.SetReplicationIntentEnabled(replicationEnabled)
 
 	indexManagers := make(map[string]*schema.SecondaryIndexManager)
 	tableEngines := make(map[string]storage.IStorageEngine)
@@ -152,6 +155,7 @@ func OpenMVCCLSM(opts Options) (_ *Engine, err error) {
 		lsmDataDir:        opts.LSMDataDir,
 		replicationConfig: replicationConfig,
 		replicator:        replicator,
+		replicationEnabled: replicationEnabled,
 		isolationMgr:      isolationMgr,
 		bufferPool:        bufferPool,
 		diskMgr:           diskMgr,
@@ -310,7 +314,7 @@ func (e *Engine) BeginTransaction(isolationLevel uint8, tableName string, tableS
 }
 
 func (e *Engine) Read(txnID int64, key []byte) ([]byte, error) {
-	if e.replicator != nil {
+	if e.replicationEnabled && e.replicator != nil {
 		if err := e.replicator.SynchronizeRead(context.Background(), txnID, key); err != nil {
 			return nil, fmt.Errorf("replication read sync failed: %w", err)
 		}
@@ -350,7 +354,7 @@ func (e *Engine) Write(txnID int64, key []byte, value []byte) error {
 	if err := e.isolationMgr.Write(txnID, key, value); err != nil {
 		return err
 	}
-	if e.replicator != nil {
+	if e.replicationEnabled && e.replicator != nil {
 		if err := e.replicator.ReplicateWrite(context.Background(), txnID, key, value); err != nil {
 			return fmt.Errorf("replication write failed: %w", err)
 		}
@@ -362,7 +366,7 @@ func (e *Engine) Delete(txnID int64, key []byte) error {
 	if err := e.isolationMgr.Delete(txnID, key); err != nil {
 		return err
 	}
-	if e.replicator != nil {
+	if e.replicationEnabled && e.replicator != nil {
 		if err := e.replicator.ReplicateDelete(context.Background(), txnID, key); err != nil {
 			return fmt.Errorf("replication delete failed: %w", err)
 		}
@@ -372,12 +376,12 @@ func (e *Engine) Delete(txnID int64, key []byte) error {
 
 func (e *Engine) Commit(txnID int64) error {
 	if err := e.isolationMgr.Commit(txnID); err != nil {
-		if e.replicator != nil {
+		if e.replicationEnabled && e.replicator != nil {
 			_ = e.replicator.Abort(context.Background(), txnID)
 		}
 		return err
 	}
-	if e.replicator != nil {
+	if e.replicationEnabled && e.replicator != nil {
 		if err := e.replicator.Commit(context.Background(), txnID); err != nil {
 			return fmt.Errorf("replication commit failed: %w", err)
 		}
@@ -388,7 +392,7 @@ func (e *Engine) Commit(txnID int64) error {
 func (e *Engine) Abort(txnID int64) error {
 	localErr := e.isolationMgr.Abort(txnID)
 	var replicationErr error
-	if e.replicator != nil {
+	if e.replicationEnabled && e.replicator != nil {
 		replicationErr = e.replicator.Abort(context.Background(), txnID)
 	}
 	return errors.Join(localErr, replicationErr)

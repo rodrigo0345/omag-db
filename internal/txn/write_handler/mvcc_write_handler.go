@@ -35,7 +35,10 @@ func NewMVCCWriteHandler(
 }
 
 func (mh *MVCCWriteHandler) HandleWrite(txn *txn_unit.Transaction, writeOp WriteOperation) error {
-	beforeImage, _ := mh.storageEngine.Get(writeOp.Key)
+	var beforeImage []byte
+	if writeOp.IsDelete {
+		beforeImage, _ = mh.storageEngine.Get(writeOp.Key)
+	}
 
 	if mh.logManager != nil {
 		walRecord := log.WALRecord{

@@ -1,6 +1,7 @@
 package log
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -62,6 +63,7 @@ type RecoveryState struct {
 
 type WALManager struct {
 	logFile *os.File
+	writer  *bufio.Writer
 	lsn     uint64
 	mu      sync.RWMutex
 
@@ -73,6 +75,7 @@ type WALManager struct {
 	txnLastLSN    map[uint64]uint64
 	pageVersions  map[page.ResourcePageID]uint64
 	txnOperations map[uint64][]RecoveryOperation // Track operations per transaction
+	lastFlushedLSN uint64
 }
 
 func NewWALManager(filePath string) (ILogManager, error) {
@@ -83,6 +86,7 @@ func NewWALManager(filePath string) (ILogManager, error) {
 
 	return &WALManager{
 		logFile:           file,
+		writer:            bufio.NewWriterSize(file, 64*1024),
 		lsn:               0,
 		lastCheckpointDPT: make(DirtyPageTable),
 		lastCheckpointATT: make(ActiveTransactionTable),
@@ -160,7 +164,7 @@ func (wm *WALManager) appendWALRecord(v *WALRecord) (LSN, error) {
 	}
 
 	buf := wm.serializeWALRecord(*v)
-	if _, err := wm.logFile.Write(buf); err != nil {
+	if _, err := wm.writer.Write(buf); err != nil {
 		return 0, fmt.Errorf("failed to write WAL record: %w", err)
 	}
 
@@ -241,12 +245,23 @@ func (wm *WALManager) deserializeWALRecord(reader io.Reader) (*WALRecord, error)
 }
 
 func (wm *WALManager) Flush(upToLSN LSN) error {
-	wm.mu.RLock()
-	defer wm.mu.RUnlock()
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+
+	if uint64(upToLSN) <= wm.lastFlushedLSN {
+		return nil
+	}
+
+	if wm.writer != nil {
+		if err := wm.writer.Flush(); err != nil {
+			return fmt.Errorf("failed to flush WAL buffer: %w", err)
+		}
+	}
 
 	if err := wm.logFile.Sync(); err != nil {
 		return fmt.Errorf("failed to sync WAL to disk: %w", err)
 	}
+	wm.lastFlushedLSN = uint64(upToLSN)
 	return nil
 }
 
@@ -268,6 +283,9 @@ func (wm *WALManager) Recover() (*RecoveryState, error) {
 	}
 
 	_ = wm.logFile.Sync()
+	if wm.writer != nil {
+		_ = wm.writer.Flush()
+	}
 
 	file, err := os.Open(wm.logFile.Name())
 	if err != nil {
@@ -498,15 +516,24 @@ func (wm *WALManager) Close() error {
 	defer wm.mu.Unlock()
 
 	if wm.logFile != nil {
+		if wm.writer != nil {
+			if err := wm.writer.Flush(); err != nil {
+				_ = wm.logFile.Close()
+				return err
+			}
+		}
 		return wm.logFile.Close()
 	}
 	return nil
 }
 
 func (wm *WALManager) ReadAllRecords() ([]WALRecord, error) {
-	wm.mu.RLock()
-	defer wm.mu.RUnlock()
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
 
+	if wm.writer != nil {
+		_ = wm.writer.Flush()
+	}
 	_ = wm.logFile.Sync()
 
 	file, err := os.Open(wm.logFile.Name())

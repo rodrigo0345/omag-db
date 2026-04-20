@@ -67,6 +67,7 @@ InesDB is database engine featuring:
 
 - **[Architecture](architecture/overview.md)**: Detailed design documentation for each component
 - **[Features](features/index.md)**: Overview of storage engine capabilities
+- **[Engine vs PostgreSQL Benchmark](features/benchmark-comparison.md)**: Container-backed performance comparison report
 - **[API Reference](api-reference/index.md)**: Complete API documentation
 - **[Packages](packages/overview.md)**: Internal package structure
 

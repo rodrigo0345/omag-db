@@ -73,7 +73,13 @@ func (m *MVCCManager) BeginTransaction(isolationLevel uint8, tableName string, t
 	transaction.SetTableContext(tableName, tableSchema)
 	m.transactions[TransactionID(txnID)] = transaction
 
-	m.indexSnapshots[TransactionID(txnID)] = m.captureIndexSnapshot(tableName)
+	if hasSecondaryIndexes(tableSchema) {
+		if indexMgr, exists := m.indexManagers[tableName]; exists && indexMgr != nil {
+			if snapshot := captureIndexSnapshotForManager(tableName, indexMgr); len(snapshot) > 0 {
+				m.indexSnapshots[TransactionID(txnID)] = snapshot
+			}
+		}
+	}
 
 	return txnID
 }
@@ -184,6 +190,7 @@ func (m *MVCCManager) Delete(txnID int64, Key []byte) error {
 func (m *MVCCManager) Commit(txnID int64) error {
 	m.mu.RLock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	startSnapshot := m.indexSnapshots[TransactionID(txnID)]
 	m.mu.RUnlock()
 
 	if !ok {
@@ -191,8 +198,8 @@ func (m *MVCCManager) Commit(txnID int64) error {
 	}
 
 	tableName, _ := transaction.GetTableContext()
-	if tableName != "" {
-		if err := m.validateIndexSnapshot(TransactionID(txnID), tableName); err != nil {
+	if tableName != "" && len(startSnapshot) > 0 {
+		if err := m.validateIndexSnapshot(tableName, startSnapshot); err != nil {
 			return fmt.Errorf("index consistency check failed: %w", err)
 		}
 	}
@@ -214,6 +221,7 @@ func (m *MVCCManager) Commit(txnID int64) error {
 	}
 
 	m.mu.Lock()
+	delete(m.transactions, TransactionID(txnID))
 	delete(m.indexSnapshots, TransactionID(txnID))
 	m.mu.Unlock()
 
@@ -223,6 +231,7 @@ func (m *MVCCManager) Commit(txnID int64) error {
 func (m *MVCCManager) Abort(txnID int64) error {
 	m.mu.Lock()
 	transaction, ok := m.transactions[TransactionID(txnID)]
+	delete(m.transactions, TransactionID(txnID))
 	delete(m.indexSnapshots, TransactionID(txnID))
 	m.mu.Unlock()
 
@@ -243,12 +252,15 @@ func (m *MVCCManager) Close() error {
 }
 
 func (m *MVCCManager) captureIndexSnapshot(tableName string) map[string]string {
-	snapshot := make(map[string]string)
-
 	indexMgr, exists := m.indexManagers[tableName]
 	if !exists || indexMgr == nil {
-		return snapshot
+		return map[string]string{}
 	}
+	return captureIndexSnapshotForManager(tableName, indexMgr)
+}
+
+func captureIndexSnapshotForManager(tableName string, indexMgr *schema.SecondaryIndexManager) map[string]string {
+	snapshot := make(map[string]string)
 
 	for _, indexName := range indexMgr.GetAllIndexNames() {
 		stats, err := indexMgr.GetIndexStats(tableName, indexName)
@@ -262,13 +274,17 @@ func (m *MVCCManager) captureIndexSnapshot(tableName string) map[string]string {
 	return snapshot
 }
 
-func (m *MVCCManager) validateIndexSnapshot(txnID TransactionID, tableName string) error {
-	startSnapshot, exists := m.indexSnapshots[txnID]
-	if !exists {
+func (m *MVCCManager) validateIndexSnapshot(tableName string, startSnapshot map[string]string) error {
+	if len(startSnapshot) == 0 {
 		return nil
 	}
 
-	currentSnapshot := m.captureIndexSnapshot(tableName)
+	indexMgr, exists := m.indexManagers[tableName]
+	if !exists || indexMgr == nil {
+		return fmt.Errorf("indexes for table %q are unavailable", tableName)
+	}
+
+	currentSnapshot := captureIndexSnapshotForManager(tableName, indexMgr)
 
 	for indexName, startFingerprint := range startSnapshot {
 		if currentFingerprint, ok := currentSnapshot[indexName]; !ok {
@@ -283,4 +299,16 @@ func (m *MVCCManager) validateIndexSnapshot(txnID TransactionID, tableName strin
 	}
 
 	return nil
+}
+
+func hasSecondaryIndexes(tableSchema *schema.TableSchema) bool {
+	if tableSchema == nil {
+		return false
+	}
+	for _, idx := range tableSchema.Indexes {
+		if idx != nil && idx.Type != schema.IndexTypePrimary {
+			return true
+		}
+	}
+	return false
 }

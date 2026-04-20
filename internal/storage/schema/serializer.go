@@ -3,6 +3,7 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type SchemaJSON struct {
@@ -34,7 +35,7 @@ func (ts *TableSchema) ToJSON() ([]byte, error) {
 		return nil, fmt.Errorf("schema validation failed: %w", err)
 	}
 
-	colsJSON := make(map[string]ColumnJSON)
+	colsJSON := make(map[string]ColumnJSON, len(ts.Columns))
 	for name, col := range ts.Columns {
 		colsJSON[name] = ColumnJSON{
 			Name:     col.Name,
@@ -43,7 +44,7 @@ func (ts *TableSchema) ToJSON() ([]byte, error) {
 		}
 	}
 
-	idxsJSON := make(map[string]IndexJSON)
+	idxsJSON := make(map[string]IndexJSON, len(ts.Indexes))
 	for name, idx := range ts.Indexes {
 		idxsJSON[name] = IndexJSON{
 			Name:     idx.Name,
@@ -74,6 +75,9 @@ func FromJSON(data []byte) (*TableSchema, error) {
 	}
 
 	ts := NewTableSchema(schemaJSON.Name, schemaJSON.PrimaryKey)
+	ts.Columns = make(map[string]*Column, len(schemaJSON.Columns))
+	ts.ColumnList = make([]string, 0, len(schemaJSON.ColumnList))
+	ts.Indexes = make(map[string]*Index, len(schemaJSON.Indexes))
 	ts.CreatedAt = schemaJSON.CreatedAt
 	ts.ModifiedAt = schemaJSON.ModifiedAt
 
@@ -103,22 +107,35 @@ func FromJSON(data []byte) (*TableSchema, error) {
 }
 
 func (ts *TableSchema) String() string {
-	result := fmt.Sprintf("Table: %s\n", ts.Name)
-	result += fmt.Sprintf("Primary Key: %s\n", ts.PrimaryKey)
-	result += "Columns:\n"
+	var b strings.Builder
+	b.Grow(len(ts.ColumnList)*32 + len(ts.Indexes)*24 + 64)
+	b.WriteString("Table: ")
+	b.WriteString(ts.Name)
+	b.WriteString("\nPrimary Key: ")
+	b.WriteString(ts.PrimaryKey)
+	b.WriteString("\nColumns:\n")
 	for _, colName := range ts.ColumnList {
 		col := ts.Columns[colName]
-		nullable := ""
+		b.WriteString("  ")
+		b.WriteString(col.Name)
+		b.WriteString(": ")
+		b.WriteString(string(col.DataType))
 		if col.Nullable {
-			nullable = " (nullable)"
+			b.WriteString(" (nullable)")
 		}
-		result += fmt.Sprintf("  %s: %s%s\n", col.Name, col.DataType, nullable)
+		b.WriteByte('\n')
 	}
 	if len(ts.Indexes) > 0 {
-		result += "Indexes:\n"
+		b.WriteString("Indexes:\n")
 		for _, idx := range ts.Indexes {
-			result += fmt.Sprintf("  %s (%s) on columns: %v\n", idx.Name, idx.Type, idx.Columns)
+			b.WriteString("  ")
+			b.WriteString(idx.Name)
+			b.WriteString(" (")
+			b.WriteString(string(idx.Type))
+			b.WriteString(") on columns: [")
+			b.WriteString(strings.Join(idx.Columns, " "))
+			b.WriteString("]\n")
 		}
 	}
-	return result
+	return b.String()
 }

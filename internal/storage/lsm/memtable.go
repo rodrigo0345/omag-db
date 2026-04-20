@@ -51,6 +51,8 @@ func FlushMemTable(id uint64, m *MemTable, falsePositiveRate float64) *SSTable {
 	for k := range m.tombstones {
 		sstable.tombstones[k] = true
 	}
+	// opt: refresh packed rows once so scan iterators use contiguous data.
+	sstable.rebuildSortedRows()
 	return sstable
 }
 
@@ -65,5 +67,7 @@ func FlushMemTableFromMap(id uint64, data map[string][]byte, tombstones map[stri
 	for k := range tombstones {
 		sstable.tombstones[k] = true
 	}
+	// opt: refresh packed rows once so scan iterators use contiguous data.
+	sstable.rebuildSortedRows()
 	return sstable
 }
