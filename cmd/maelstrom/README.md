@@ -60,5 +60,6 @@ cd /home/rodrigo0345/omag/cmd/maelstrom
 make test-raft-omission NODE_COUNT=5 CONCURRENCY=20 TIME_LIMIT=60 RATE=200
 make test-raft-crash NODE_COUNT=5 NEMESIS_INTERVAL=3
 make test-raft-fault NEMESIS=partition NODE_COUNT=5
+make test-raft-fault NODE_COUNT=3 NEMESIS=partition
 ```
 

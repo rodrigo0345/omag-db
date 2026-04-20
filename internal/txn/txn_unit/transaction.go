@@ -3,6 +3,7 @@ package txn_unit
 import (
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/storage/schema"
@@ -30,6 +31,7 @@ type Transaction struct {
 	state            TxnState
 	sharedLocks      [][]byte
 	exclusiveLocks   [][]byte
+	lockMu           sync.Mutex
 	undoLog          *undo.UndoLog
 	isolationLevel   uint8
 	tableName        string
@@ -39,7 +41,7 @@ type Transaction struct {
 	touchedTables    map[string]struct{}
 	cleanupCallbacks []func() error
 	operations       []log.RecoveryOperation // Operations for crash recovery
-	txn_write_prefix string // used to manage isolation level copies
+	txn_write_prefix string                  // used to manage isolation level copies
 }
 
 func NewTransaction(txnID uint64, isolationLevel uint8) *Transaction {
@@ -159,11 +161,15 @@ func (t *Transaction) GetTouchedTables() []string {
 }
 
 func (t *Transaction) GetSharedLocks() [][]byte {
-	return t.sharedLocks
+	t.lockMu.Lock()
+	defer t.lockMu.Unlock()
+	return cloneByteSlices(t.sharedLocks)
 }
 
 func (t *Transaction) GetExclusiveLocks() [][]byte {
-	return t.exclusiveLocks
+	t.lockMu.Lock()
+	defer t.lockMu.Unlock()
+	return cloneByteSlices(t.exclusiveLocks)
 }
 
 func (t *Transaction) GetWritePrefix() string {
@@ -175,14 +181,20 @@ func (t *Transaction) Commit() {
 }
 
 func (t *Transaction) AddSharedLock(key []byte) {
+	t.lockMu.Lock()
+	defer t.lockMu.Unlock()
 	t.sharedLocks = append(t.sharedLocks, key)
 }
 
 func (t *Transaction) AddExclusiveLock(key []byte) {
+	t.lockMu.Lock()
+	defer t.lockMu.Unlock()
 	t.exclusiveLocks = append(t.exclusiveLocks, key)
 }
 
 func (t *Transaction) RemoveSharedLock(key []byte) {
+	t.lockMu.Lock()
+	defer t.lockMu.Unlock()
 	for i, k := range t.sharedLocks {
 		if bytesEqual(k, key) {
 			t.sharedLocks = append(t.sharedLocks[:i], t.sharedLocks[i+1:]...)
@@ -192,6 +204,8 @@ func (t *Transaction) RemoveSharedLock(key []byte) {
 }
 
 func (t *Transaction) RemoveExclusiveLock(key []byte) {
+	t.lockMu.Lock()
+	defer t.lockMu.Unlock()
 	for i, k := range t.exclusiveLocks {
 		if bytesEqual(k, key) {
 			t.exclusiveLocks = append(t.exclusiveLocks[:i], t.exclusiveLocks[i+1:]...)
@@ -228,6 +242,21 @@ func stringSetToSortedBytes(values map[string]struct{}) [][]byte {
 		result = append(result, []byte(key))
 	}
 	return result
+}
+
+func cloneByteSlices(values [][]byte) [][]byte {
+	if len(values) == 0 {
+		return [][]byte{}
+	}
+
+	cloned := make([][]byte, len(values))
+	for i, value := range values {
+		if value == nil {
+			continue
+		}
+		cloned[i] = append([]byte(nil), value...)
+	}
+	return cloned
 }
 
 func (t *Transaction) RegisterCleanupCallback(cleanup func() error) {
