@@ -85,6 +85,25 @@ jobs:
         GOOS=linux GOARCH=amd64 go build -v -o release-linux-amd64 ./cmd/cli
         GOOS=linux GOARCH=arm64 go build -v -o release-linux-arm64 ./cmd/cli
 
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Build and Push Docker Image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: |
+          ${{ secrets.DOCKERHUB_USERNAME }}/inesdb:${{ steps.tag_version.outputs.new_tag }}
+          ${{ secrets.DOCKERHUB_USERNAME }}/inesdb:latest
+
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
