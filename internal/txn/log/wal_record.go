@@ -6,25 +6,25 @@ import (
 	"github.com/rodrigo0345/omag/internal/storage/page"
 )
 
-// WALRecord represents a single entry in the Write-Ahead Log
-// Each record follows the ARIES format for recovery and durability
 type WALRecord struct {
-	LSN     uint64                       // Log Sequence Number (monotonically increasing, uniquely identifies this record)
-	PrevLSN uint64                       // LSN of the previous record for this transaction (enables efficient backward walking)
-	TxnID   uint64                       // Transaction ID of the transaction that generated this record
-	Type    RecordType                   // Type of record (UPDATE, COMMIT, ABORT, or CHECKPOINT)
-	PageID  page.ResourcePageID // Page affected by this record (only meaningful for UPDATE records)
-	Offset  uint16                       // Offset within the page where the update occurred
-	PageLSN uint64                       // LSN of the last log record that modified this page (for idempotency checking)
-	Before  []byte                       // Before image (used for undo during rollback)
-	After   []byte                       // After image (used for redo during recovery)
+	LSN     uint64
+	PrevLSN uint64
+	TxnID   uint64
+	TableName string
+	Type    RecordType
+	PageID  page.ResourcePageID
+	Offset  uint16
+	PageLSN uint64
+	Before  []byte
+	After   []byte
 }
 
-func NewWALRecord(lsn, prevLSN, txnID uint64, recordType RecordType, pageID page.ResourcePageID, offset uint16, pageLSN uint64, before, after []byte) WALRecord {
+func NewWALRecord(lsn, prevLSN, txnID uint64, tableName string, recordType RecordType, pageID page.ResourcePageID, offset uint16, pageLSN uint64, before, after []byte) WALRecord {
 	return WALRecord{
 		LSN:     lsn,
 		PrevLSN: prevLSN,
 		TxnID:   txnID,
+		TableName: tableName,
 		Type:    recordType,
 		PageID:  pageID,
 		Offset:  offset,
@@ -35,8 +35,8 @@ func NewWALRecord(lsn, prevLSN, txnID uint64, recordType RecordType, pageID page
 }
 
 func (rec WALRecord) String() string {
-	return fmt.Sprintf("WALRecord{LSN: %d, PrevLSN: %d, TxnID: %d, Type: %v, PageID: %d, Offset: %d, PageLSN: %d, Before: %v, After: %v}",
-		rec.LSN, rec.PrevLSN, rec.TxnID, rec.Type, rec.PageID, rec.Offset, rec.PageLSN, rec.Before, rec.After)
+	return fmt.Sprintf("WALRecord{LSN: %d, PrevLSN: %d, TxnID: %d, TableName: %q, Type: %v, PageID: %d, Offset: %d, PageLSN: %d, Before: %v, After: %v}",
+		rec.LSN, rec.PrevLSN, rec.TxnID, rec.TableName, rec.Type, rec.PageID, rec.Offset, rec.PageLSN, rec.Before, rec.After)
 }
 
 func (rec WALRecord) GetLSN() uint64 {

@@ -1,0 +1,13 @@
+{
+  "sstable_id": 3,
+  "sstables": [
+    {
+      "id": 1,
+      "level": 0
+    },
+    {
+      "id": 2,
+      "level": 0
+    }
+  ]
+}

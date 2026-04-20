@@ -15,6 +15,7 @@ nav:
   - Home: index.md
   - Architecture:
       - Overview: architecture/overview.md
+      - Class Diagrams: architecture/diagrams.md
       - B+ Tree: architecture/bplus-tree.md
       - LSM Tree: architecture/lsm-tree.md
       - Buffer Pool: architecture/buffer-pool.md
@@ -22,6 +23,7 @@ nav:
       - Concurrency: architecture/concurrency.md
   - Features:
       - Index: features/index.md
+      - Engine vs PostgreSQL Benchmark: features/benchmark-comparison.md
   - API Reference:
       - Index: api-reference/index.md
       - B+ Tree API: api/btree.md
@@ -39,7 +41,11 @@ nav:
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: plantuml
+          class: plantuml
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight
   - toc:
       permalink: true
@@ -49,6 +55,8 @@ markdown_extensions:
 plugins:
   - search
   - mike
+  - plantuml:
+      puml_url: https://www.plantuml.com/plantuml/svg/
 
 extra:
   social:

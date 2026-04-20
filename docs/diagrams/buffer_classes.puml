@@ -1,0 +1,74 @@
+@startuml
+namespace buffer {
+    class "BufferPoolManager" << (S,Aquamarine) >> {
+        - poolSize int
+        - frames []page.IResourcePage
+        - pageTable <font color=blue>map</font>[page.ResourcePageID]concurrency.FrameID
+        - freeList []concurrency.FrameID
+        - diskManager *DiskManager
+        - replacerManager concurrency.IReplacer
+        - walMgr <font color=blue>interface</font>{}
+        - mu sync.Mutex
+
+        - flushPageInternal(page page.IResourcePage) error
+        - getAvailableFrameIDLocked() (concurrency.FrameID, error)
+
+        + SetWALManager(walMgr <font color=blue>interface</font>{}) 
+        + PinPage(pageID page.ResourcePageID) (page.IResourcePage, error)
+        + UnpinPage(pageID page.ResourcePageID, isDirty bool) error
+        + NewPage() (*page.IResourcePage, error)
+        + FlushPage(pageID page.ResourcePageID) error
+        + FlushAll() error
+        + Close() error
+        + GetPoolSize() int
+        + GetReplacerSize() int
+
+    }
+    class "DiskManager" << (S,Aquamarine) >> {
+        - dbFile *os.File
+        - nextPage page.ResourcePageID
+        - mu sync.RWMutex
+        - writeQueue <font color=blue>chan</font> writeRequest
+        - wg sync.WaitGroup
+        - quit <font color=blue>chan</font> <font color=blue>struct</font>{}
+        - closed bool
+
+        - runBatchWorker() 
+
+        + WritePage(pageID page.ResourcePageID, pageData []byte) error
+        + ReadPage(pageID page.ResourcePageID, pageData []byte) error
+        + AllocatePage() page.ResourcePageID
+        + Close() error
+        + GetFileSize() (int64, error)
+        + Flush() error
+        + Sync() error
+
+    }
+    interface "IBufferPoolManager"  {
+        + NewPage() (*page.IResourcePage, error)
+        + PinPage(pageID page.ResourcePageID) (page.IResourcePage, error)
+        + UnpinPage(pageID page.ResourcePageID, isDirty bool) error
+        + FlushAll() error
+        + Close() error
+
+    }
+    interface "WALFlusher"  {
+        + Flush(upToLSN uint64) error
+
+    }
+    class "buffer.ReplacerType" << (T, #FF7700) >>  {
+    }
+    class "writeRequest" << (S,Aquamarine) >> {
+        - pageID page.ResourcePageID
+        - pageData []byte
+        - done <font color=blue>chan</font> <font color=blue>struct</font>{}
+        - isMarker bool
+
+    }
+}
+"__builtin__.int" #.. "buffer.ReplacerType"
+
+"buffer.IBufferPoolManager" <|-- "buffer.BufferPoolManager"
+
+
+@enduml

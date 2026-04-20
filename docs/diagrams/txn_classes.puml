@@ -1,0 +1,231 @@
+@startuml
+namespace txn {
+    class "CrashEvent" << (S,Aquamarine) >> {
+        + Point CrashPoint
+        + Timestamp int64
+        + Details <font color=blue>map</font>[string]<font color=blue>interface</font>{}
+        + Recovered bool
+        + DataLoss bool
+        + Description string
+
+    }
+    class "CrashLog" << (S,Aquamarine) >> {
+        + Events []CrashEvent
+        + TotalCrashes int
+        + SuccessfulRecoveries int
+        + FailedRecoveries int
+        + DataLossCount int
+
+        + LogCrash(event CrashEvent) 
+        + PrintSummary() string
+
+    }
+    class "CrashRecoveryScenario" << (S,Aquamarine) >> {
+        + Name string
+        + Description string
+        + CrashPoint CrashPoint
+        + PreCrashOperations <font color=blue>func</font>() error
+        + PostRecoveryValidation <font color=blue>func</font>() error
+        + ExpectDataLoss bool
+        + ExpectedCommittedCount int
+        + ExpectedAbortedCount int
+
+        + ExecuteScenario() (*CrashEvent, error)
+        + ValidateRecovery(event *CrashEvent, state *log.RecoveryState) error
+
+    }
+    class "CrashSimulator" << (S,Aquamarine) >> {
+        + CrashPoint CrashPoint
+        + Enabled bool
+        + TriggerCount int
+        + CurrentCount int
+
+        + ShouldCrash(currentPoint CrashPoint) bool
+        + TriggerCrash(point CrashPoint, details <font color=blue>map</font>[string]<font color=blue>interface</font>{}) error
+
+    }
+    class "DefaultRecoveryCoordinator" << (S,Aquamarine) >> {
+        - walMgr log.ILogManager
+        - storageEngine storage.IStorageEngine
+        - bufferPool buffer.IBufferPoolManager
+        - rollbackMgr *RollbackManager
+        - stats RecoveryStats
+
+        - applyLSMRecovery(ctx context.Context, engine *lsm.LSMTreeBackend, state *log.RecoveryState) error
+        - applyBTreeRecovery(ctx context.Context, engine *btree.BPlusTreeBackend, state *log.RecoveryState) error
+
+        + RecoverFromCrash(ctx context.Context) (*log.RecoveryState, error)
+        + ApplyRecoveryState(ctx context.Context, state *log.RecoveryState) error
+        + ValidateRecoveredState(ctx context.Context, state *log.RecoveryState) error
+        + GetRecoveryStats() RecoveryStats
+
+    }
+    class "DefaultWriteHandler" << (S,Aquamarine) >> {
+        - storageEngine storage.IStorageEngine
+        - rollbackManager *RollbackManager
+        - logManager log.ILogManager
+        - bufferManager buffer.IBufferPoolManager
+        - indexManager *schema.SecondaryIndexManager
+        - tableSchema *schema.TableSchema
+
+        + HandleWrite(txn *Transaction, writeOp WriteOperation) error
+        + GetStorageEngine() storage.IStorageEngine
+        + SetIndexContext(tableSchema *schema.TableSchema, indexMgr *schema.SecondaryIndexManager) error
+
+    }
+    interface "IIsolationManager"  {
+        + BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64
+        + Read(txnID int64, Key []byte) ([]byte, error)
+        + Write(txnID int64, Key []byte, Value []byte) error
+        + Commit(txnID int64) error
+        + Abort(txnID int64) error
+        + Close() error
+
+    }
+    class "MVCCWriteHandler" << (S,Aquamarine) >> {
+        - storageEngine storage.IStorageEngine
+        - logManager log.ILogManager
+        - bufferManager buffer.IBufferPoolManager
+        - rollbackManager *RollbackManager
+        - indexManager *schema.SecondaryIndexManager
+        - tableSchema *schema.TableSchema
+
+        + HandleWrite(txn *Transaction, writeOp WriteOperation) error
+        + SetIndexContext(tableSchema *schema.TableSchema, indexMgr *schema.SecondaryIndexManager) error
+
+    }
+    interface "RecoveryCoordinator"  {
+        + RecoverFromCrash(ctx context.Context) (*log.RecoveryState, error)
+        + ApplyRecoveryState(ctx context.Context, state *log.RecoveryState) error
+        + ValidateRecoveredState(ctx context.Context, state *log.RecoveryState) error
+        + GetRecoveryStats() RecoveryStats
+
+    }
+    class "RecoveryStateProcessor" << (S,Aquamarine) >> {
+        - rollbackMgr *RollbackManager
+
+        - cleanupAbortedTransactions(state *log.RecoveryState) error
+
+        + ProcessRecoveryState(state *log.RecoveryState) error
+        + GetRecoveredTransactionIDs(state *log.RecoveryState) ([]uint64, []uint64)
+        + GetRecoveredUndoLog(state *log.RecoveryState) []*undo.Operation
+        + ValidateRecoveryConsistency(state *log.RecoveryState) error
+
+    }
+    class "RecoveryStats" << (S,Aquamarine) >> {
+        + TotalRecords int64
+        + RecordsRedo int64
+        + RecordsUndo int64
+        + CommittedTransactions int
+        + RolledbackTransactions int
+        + PagesRecovered int
+        + Duration int64
+
+    }
+    class "RecoveryValidator" << (S,Aquamarine) >> {
+        - storageEngine storage.IStorageEngine
+        - bufferPool buffer.IBufferPoolManager
+
+        - validateStateConsistency(state *log.RecoveryState, result *ValidationResult) error
+        - validateDirtyPageTable(state *log.RecoveryState, result *ValidationResult) error
+        - validateTransactionConsistency(state *log.RecoveryState, result *ValidationResult) error
+        - validateStorageEngineState(state *log.RecoveryState, result *ValidationResult) error
+
+        + ValidateRecoveredState(state *log.RecoveryState) (*ValidationResult, error)
+
+    }
+    class "RollbackManager" << (S,Aquamarine) >> {
+        - bufferMgr buffer.IBufferPoolManager
+        - nextOpID uint64
+        - mu sync.RWMutex
+
+        + RecordPageWrite(txn *Transaction, pageID page.ResourcePageID, offset uint16, beforeData []byte) (uint64, error)
+        + RollbackTransaction(txn *Transaction, onBeforeRollback <font color=blue>func</font>() error, onAfterRollback <font color=blue>func</font>() error) error
+        + HasOperations(txn *Transaction) bool
+        + RollbackToSavePoint(txn *Transaction, savePoint int) error
+        + GetOperationCount(txn *Transaction) int
+        + RegisterIndexCleanup(txn *Transaction, cleanup <font color=blue>func</font>() error) 
+
+    }
+    class "Transaction" << (S,Aquamarine) >> {
+        - txnID uint64
+        - state TxnState
+        - sharedLocks [][]byte
+        - exclusiveLocks [][]byte
+        - undoLog *undo.UndoLog
+        - isolationLevel uint8
+        - tableName string
+        - tableSchema *schema.TableSchema
+        - cleanupCallbacks []<font color=blue>func</font>() error
+
+        + SetTableContext(tableName string, tableSchema *schema.TableSchema) 
+        + GetTableContext() (string, *schema.TableSchema)
+        + GetID() uint64
+        + RecordOperation(op undo.Operation) error
+        + AddUndo(op undo.Operation) error
+        + Rollback(bufferMgr buffer.IBufferPoolManager) error
+        + RollbackToPoint(point int, bufferMgr buffer.IBufferPoolManager) error
+        + SavePoint() int
+        + Abort() 
+        + GetState() TxnState
+        + GetUndoLog() *undo.UndoLog
+        + GetIsolationLevel() uint8
+        + Commit() 
+        + AddSharedLock(key []byte) 
+        + AddExclusiveLock(key []byte) 
+        + RemoveSharedLock(key []byte) 
+        + RemoveExclusiveLock(key []byte) 
+        + RegisterCleanupCallback(cleanup <font color=blue>func</font>() error) 
+        + ExecuteCleanupCallbacks() error
+
+    }
+    class "TransactionManager" << (S,Aquamarine) >> {
+        - isolationManager IIsolationManager
+        - logManager log.ILogManager
+        - bufferPoolManager buffer.IBufferPoolManager
+        - rollbackManager *RollbackManager
+        - writeHandler WriteHandler
+
+        + GetRollbackManager() *RollbackManager
+        + GetWriteHandler() WriteHandler
+        + RollbackRemainingTransactions(ctx context.Context, recoveryState *log.RecoveryState) error
+
+    }
+    class "ValidationResult" << (S,Aquamarine) >> {
+        + IsValid bool
+        + Errors []string
+        + Details <font color=blue>map</font>[string]<font color=blue>interface</font>{}
+
+        + GetValidationSummary() string
+
+    }
+    interface "WriteHandler"  {
+        + HandleWrite(txn *Transaction, writeOp WriteOperation) error
+        + SetIndexContext(tableSchema *schema.TableSchema, indexMgr *schema.SecondaryIndexManager) error
+
+    }
+    class "WriteOperation" << (S,Aquamarine) >> {
+        + Key []byte
+        + Value []byte
+        + PageID page.ResourcePageID
+        + Offset uint16
+        + IsDelete bool
+        + TableName string
+        + SchemaInfo *schema.TableSchema
+        + PrimaryKey []byte
+
+    }
+    class "txn.CrashPoint" << (T, #FF7700) >>  {
+    }
+    class "txn.TxnState" << (T, #FF7700) >>  {
+    }
+}
+"__builtin__.int" #.. "txn.TxnState"
+"__builtin__.string" #.. "txn.CrashPoint"
+
+"txn.RecoveryCoordinator" <|-- "txn.DefaultRecoveryCoordinator"
+"txn.WriteHandler" <|-- "txn.DefaultWriteHandler"
+"txn.WriteHandler" <|-- "txn.MVCCWriteHandler"
+
+
+@enduml

@@ -2,26 +2,52 @@ package lsm
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/rodrigo0345/omag/internal/storage"
+	"github.com/rodrigo0345/omag/internal/storage/lsm/mocks"
 	"github.com/rodrigo0345/omag/internal/storage/page"
 	"github.com/rodrigo0345/omag/internal/txn/log"
 )
 
-// Helper function to create a mock LSM tree for testing
 func createTestLSM(t *testing.T) *LSMTreeBackend {
-	// Create mock implementations
-	mockLogMgr := &mockLogManager{}
-	mockBufMgr := &mockBufferManager{}
+	t.Helper()
+	// Keep tests isolated from repository-level lsm_data to avoid state bleed.
+	return createIsolatedTestLSM(t)
+}
 
-	lsm := NewLSMTreeBackend(mockLogMgr, mockBufMgr)
+func createIsolatedTestLSM(t *testing.T) *LSMTreeBackend {
+	t.Helper()
+
+	mockLogMgr := &mocks.MockLogManager{}
+	mockBufMgr := &mocks.MockBufferManager{}
+
+	lsm := NewLSMTreeBackendWithDataDir(mockLogMgr, mockBufMgr, t.TempDir())
 	if lsm == nil {
-		t.Fatal("failed to create LSM tree backend")
+		t.Fatal("failed to create isolated LSM tree backend")
 	}
 	return lsm
+}
+
+func scanEntriesToMap(entries []storage.ScanEntry) map[string]string {
+	result := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		result[string(entry.Key)] = string(entry.Value)
+	}
+	return result
+}
+
+func sortedScanKeys(entries []storage.ScanEntry) []string {
+	keys := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		keys = append(keys, string(entry.Key))
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 type mockLogManager struct {
@@ -50,6 +76,10 @@ func (m *mockLogManager) Checkpoint() error {
 
 func (m *mockLogManager) GetLastCheckpointLSN() uint64 {
 	return 0
+}
+
+func (m *mockLogManager) AddTransactionOperation(txnID uint64, tableName string, opType log.RecordType, key []byte, value []byte) {
+
 }
 
 func (m *mockLogManager) Close() error {
@@ -226,10 +256,63 @@ func TestLSMTreeBackend_MultipleKV(t *testing.T) {
 	}
 }
 
+func TestLSMTreeBackend_ScanReturnsMergedView(t *testing.T) {
+	lsm := createIsolatedTestLSM(t)
+
+	if err := lsm.Put([]byte("alpha"), []byte("one")); err != nil {
+		t.Fatalf("Put(alpha) error = %v", err)
+	}
+	if err := lsm.Put([]byte("bravo"), []byte("two")); err != nil {
+		t.Fatalf("Put(bravo) error = %v", err)
+	}
+	if err := lsm.Put([]byte("charlie"), []byte("three")); err != nil {
+		t.Fatalf("Put(charlie) error = %v", err)
+	}
+
+	lsm.flush()
+
+	if err := lsm.Put([]byte("bravo"), []byte("two-updated")); err != nil {
+		t.Fatalf("Put(bravo updated) error = %v", err)
+	}
+	if err := lsm.Delete([]byte("alpha")); err != nil {
+		t.Fatalf("Delete(alpha) error = %v", err)
+	}
+	if err := lsm.Put([]byte("delta"), []byte("four")); err != nil {
+		t.Fatalf("Put(delta) error = %v", err)
+	}
+
+	entries, err := lsm.Scan([]byte("a"), []byte("z"))
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+
+	got := scanEntriesToMap(entries)
+	want := map[string]string{
+		"bravo":   "two-updated",
+		"charlie": "three",
+		"delta":   "four",
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("Scan() entry count = %d, want %d (keys=%v)", len(got), len(want), sortedScanKeys(entries))
+	}
+	for key, wantValue := range want {
+		if got[key] != wantValue {
+			t.Fatalf("Scan() key %q = %q, want %q", key, got[key], wantValue)
+		}
+	}
+	if _, exists := got["alpha"]; exists {
+		t.Fatalf("Scan() unexpectedly returned tombstoned key alpha")
+	}
+}
+
 func TestLSMTreeBackend_MemtableFlush(t *testing.T) {
 	lsm := createTestLSM(t)
 
-	initialLevels := len(lsm.levels)
+	initialLevel0Tables := 0
+	if len(lsm.levels) > 0 {
+		initialLevel0Tables = len(lsm.levels[0])
+	}
 
 	for i := 0; i < SSTableMaxSize+10; i++ {
 		key := []byte(fmt.Sprintf("key%d", i))
@@ -239,8 +322,11 @@ func TestLSMTreeBackend_MemtableFlush(t *testing.T) {
 		}
 	}
 
-	if len(lsm.levels) <= initialLevels {
-		t.Fatalf("expected levels to increase after flush, but remained at %d", len(lsm.levels))
+	if len(lsm.levels) == 0 {
+		t.Fatal("expected at least one level after flush")
+	}
+	if len(lsm.levels[0]) <= initialLevel0Tables {
+		t.Fatalf("expected level-0 table count to increase after flush, before=%d after=%d", initialLevel0Tables, len(lsm.levels[0]))
 	}
 
 	for i := 0; i < SSTableMaxSize+10; i++ {
@@ -317,7 +403,6 @@ func TestLSMTreeBackend_LargeValues(t *testing.T) {
 	}
 }
 
-// Test: Empty keys and values
 func TestLSMTreeBackend_EdgeCases(t *testing.T) {
 	lsm := createTestLSM(t)
 
@@ -327,7 +412,6 @@ func TestLSMTreeBackend_EdgeCases(t *testing.T) {
 		t.Fatalf("expected empty value, got %v", retrieved)
 	}
 
-	// Special characters in key
 	specialKey := []byte("key\x00\xFF\x01")
 	lsm.Put(specialKey, []byte("specialvalue"))
 	retrieved, _ = lsm.Get(specialKey)
@@ -352,23 +436,19 @@ func TestLSMTreeBackend_TotalItemsTracking(t *testing.T) {
 	}
 }
 
-// Test: Cascading compaction
 func TestLSMTreeBackend_CascadingCompaction(t *testing.T) {
 	lsm := createTestLSM(t)
 
-	// Insert enough items to cause compaction cascading through multiple levels
 	itemCount := SSTableMaxSize * 5
 	for i := 0; i < itemCount; i++ {
 		key := []byte(fmt.Sprintf("cascadekey%d", i))
 		lsm.Put(key, []byte("cascadevalue"))
 	}
 
-	// Should have multiple levels due to cascading
 	if len(lsm.levels) < 2 {
 		t.Fatalf("expected at least 2 levels after cascading compaction, got %d", len(lsm.levels))
 	}
 
-	// All keys should still be retrievable
 	for i := 0; i < itemCount; i++ {
 		key := []byte(fmt.Sprintf("cascadekey%d", i))
 		_, err := lsm.Get(key)

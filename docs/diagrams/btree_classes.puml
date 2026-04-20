@@ -1,0 +1,148 @@
+@startuml
+namespace btree {
+    class "BPlusTreeBackend" << (S,Aquamarine) >> {
+        - bufferManager buffer.IBufferPoolManager
+        - diskManager <font color=blue>interface</font>{WritePage <font color=blue>func</font>(page.ResourcePageID, []byte) error; ReadPage <font color=blue>func</font>(page.ResourcePageID, []byte) error}
+        - meta *MetaLogicPage
+
+        - initializeRoot() error
+        - getWithOverflow(leaf *LeafLogicPage, key []byte) ([]byte, uint64, error)
+        - insertWithOverflow(leaf *LeafLogicPage, key []byte, inlineValue []byte, overflowID uint64) error
+        - splitLeafWithOverflow(breadcrumbs []uint64, leafPage page.IResourcePage, leafID uint64, key []byte, inlineValue []byte, overflowID uint64) error
+        - findLeafPage(pageID uint64, key []byte) ([]uint64, error)
+        - splitLeaf(breadcrumbs []uint64, leafPage page.IResourcePage, leafID uint64, key []byte, value []byte) error
+        - promoteKey(breadcrumbs []uint64, key []byte, childID uint64) error
+        - splitInternal(path []uint64, parentPage page.IResourcePage, parentID uint64, key []byte, childID uint64) error
+        - createNewRoot(oldRootID uint64, key []byte, rightChildID uint64) error
+        - writeValueWithOverflow(value []byte) (int, uint64, error)
+        - readValueWithOverflow(inlineData []byte, firstOverflowPageID uint64) ([]byte, error)
+        - deleteValueWithOverflow(firstOverflowPageID uint64) error
+        - shouldMergePage(page page.IResourcePage) bool
+        - getRightSibling(leafPage page.IResourcePage) uint64
+        - getLeftSibling(breadcrumbs []uint64, leafID uint64) (uint64, error)
+        - mergeLeafPages(breadcrumbs []uint64, leafPage page.IResourcePage, leafID uint64) (bool, error)
+
+        + LoadMetadataFromDisk() error
+        + SaveMetadataToDisk() error
+        + GetRootPageID() uint64
+        + Get(key []byte) ([]byte, error)
+        + Put(key []byte, value []byte) error
+        + Delete(key []byte) error
+        + Scan() ([]storage.ScanEntry, error)
+
+    }
+    class "BTreeRecoveryValidator" << (S,Aquamarine) >> {
+        - bufferManager buffer.IBufferPoolManager
+        - btreeBackend *BPlusTreeBackend
+
+        - validateMetadataPage(report *CorruptionReport) error
+        - validateTreeStructure(report *CorruptionReport) error
+        - findOrphanedPages(report *CorruptionReport) error
+
+        + ValidateStructure() (*CorruptionReport, error)
+        + RepairStructure(report *CorruptionReport) error
+        + VerifyRecovery() error
+
+    }
+    class "Cell" << (S,Aquamarine) >> {
+        + Key []byte
+        + Value []byte
+        + OverflowID uint64
+
+    }
+    class "CorruptionReport" << (S,Aquamarine) >> {
+        + TotalPagesScanned int
+        + ValidPages int
+        + CorruptedPages []page.ResourcePageID
+        + OrphanedPages []page.ResourcePageID
+        + BrokenOverflowChains []page.ResourcePageID
+        + UnreachableBlocks []page.ResourcePageID
+        + IsCorrupted bool
+        + ErrorCount int
+        + ErrorLog []string
+
+        + GetOrphanedPageCount() int
+        + GetCorruptedPageCount() int
+        + GetBrokenChainCount() int
+
+    }
+    class "InternalCell" << (S,Aquamarine) >> {
+        + ChildPointer uint64
+        + Key []byte
+
+    }
+    class "InternalLogicPage" << (S,Aquamarine) >> {
+        - data []byte
+
+        + PageType() LogicPageType
+        + CellCount() uint16
+        + FreeSpacePointer() uint16
+        + RightmostPointer() uint64
+        + SetPageType(pageType LogicPageType) 
+        + SetCellCount(count uint16) 
+        + SetFreeSpacePointer(pointer uint16) 
+        + SetRightmostPointer(pointer uint64) 
+        + GetCellOffset(cellIndex uint16) uint16
+        + GetCell(offset uint16) InternalCell
+        + WriteCell(offset uint16, key []byte, childPointer uint64) uint16
+        + Insert(key []byte, childPointer uint64) error
+        + Search(key []byte) uint64
+        + Vacuum() 
+        + Split(newPage *InternalLogicPage) []byte
+
+    }
+    class "LeafLogicPage" << (S,Aquamarine) >> {
+        - data []byte
+
+        + Insert(key []byte, value []byte) error
+        + Get(key []byte) ([]byte, error)
+        + Remove(key []byte) error
+        + Vacuum() 
+        + Split(newPage *LeafLogicPage, newPageID uint64) []byte
+        + GetCellOffset(cellIndex uint16) uint16
+        + PageType() LogicPageType
+        + CellCount() uint16
+        + FreeSpacePointer() uint16
+        + RightSibling() uint64
+        + SetPageType(pageType LogicPageType) 
+        + SetCellCount(count uint16) 
+        + SetFreeSpacePointer(pointer uint16) 
+        + SetRightSibling(siblingID uint64) 
+        + GetCell(offset uint16) Cell
+        + WriteCell(offset uint16, key []byte, value []byte) uint16
+        + WriteCellWithOverflow(offset uint16, key []byte, value []byte, overflowID uint64) uint16
+
+    }
+    class "MetaLogicPage" << (S,Aquamarine) >> {
+        - data []byte
+
+        + PageType() LogicPageType
+        + MagicNumber() uint32
+        + Version() uint16
+        + PageSize() uint32
+        + RootPage() uint64
+        + SetPageType(ptype LogicPageType) 
+        + SetMagicNumber(magic uint32) 
+        + SetVersion(version uint16) 
+        + SetPageSize(size uint32) 
+        + SetRootPage(rootID uint64) 
+
+    }
+    class "OverflowPage" << (S,Aquamarine) >> {
+        - data []byte
+
+        + SetNextOverflowID(nextID uint64) 
+        + GetNextOverflowID() uint64
+        + WriteData(offset int, data []byte) int
+        + ReadData(offset int, length int) []byte
+        + GetData() []byte
+
+    }
+    class "btree.LogicPageType" << (T, #FF7700) >>  {
+    }
+}
+"__builtin__.uint16" #.. "btree.LogicPageType"
+
+
+
+@enduml

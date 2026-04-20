@@ -1,11 +1,11 @@
-name: Maelstrom Stress Test
+name: Maelstrom Fault Test
 
 on:
   pull_request:
     branches: [ "**" ]
 
 jobs:
-  stress-test:
+  fault-test:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
@@ -27,7 +27,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y graphviz gnuplot
 
-    - name: Run Maelstrom Stress Test
+    - name: Run Maelstrom Fault Test
       run: |
         cd cmd/maelstrom
-        make test-stress
+        make test-raft-fault NODE_COUNT=3 NEMESIS=partition

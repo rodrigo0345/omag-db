@@ -50,6 +50,41 @@ jobs:
         go doc ./internal/txn > docs/api/transactions.md || true
         go doc ./internal/concurrency > docs/api/concurrency.md || true
 
+    - name: Install GoPlantUML
+      run: go install github.com/jfeliu007/goplantuml/cmd/goplantuml@latest
+
+    - name: Generate Class Diagrams
+      run: |
+        mkdir -p docs/diagrams
+        
+        echo "Generating class diagrams..."
+        goplantuml -output docs/diagrams/txn_classes.puml ./internal/txn || true
+        goplantuml -output docs/diagrams/isolation_classes.puml ./internal/isolation || true
+        goplantuml -output docs/diagrams/storage_classes.puml ./internal/storage || true
+        goplantuml -output docs/diagrams/btree_classes.puml ./internal/storage/btree || true
+        goplantuml -output docs/diagrams/lsm_classes.puml ./internal/storage/lsm || true
+        goplantuml -output docs/diagrams/buffer_classes.puml ./internal/storage/buffer || true
+        goplantuml -output docs/diagrams/concurrency_classes.puml ./internal/concurrency || true
+        goplantuml -output docs/diagrams/full_architecture.puml ./internal || true
+        
+        echo "Class diagrams generated successfully!"
+        ls -la docs/diagrams/
+
+    - name: Commit Generated Diagrams
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # Check if there are changes
+        if git diff --quiet docs/diagrams/; then
+          echo "No diagram changes to commit"
+        else
+          echo "Committing generated diagrams..."
+          git add docs/diagrams/*.puml
+          git commit -m "docs: auto-generate class diagrams [skip ci]" --no-verify || true
+          git push origin main || true
+        fi
+
     - name: Generate Go Packages Overview
       run: |
         mkdir -p docs/packages

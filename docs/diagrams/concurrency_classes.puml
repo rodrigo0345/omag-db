@@ -1,0 +1,48 @@
+@startuml
+namespace concurrency {
+    class "ClockReplacer" << (S,Aquamarine) >> {
+        - mu sync.Mutex
+        - frames []clockFrame
+        - clockHand int
+        - poolSize int
+        - activeSize int
+
+        + Victim() (FrameID, bool)
+        + Pin(frameID FrameID) 
+        + Unpin(frameID FrameID) 
+        + Size() int
+
+    }
+    interface "IReplacer"  {
+        + Victim() (FrameID, bool)
+        + Pin(frameID FrameID) 
+        + Unpin(frameID FrameID) 
+        + Size() int
+
+    }
+    class "LRUReplacer" << (S,Aquamarine) >> {
+        - mu sync.Mutex
+        - list *list.List
+        - frameMap <font color=blue>map</font>[FrameID]*list.Element
+
+        + Victim() (FrameID, bool)
+        + Pin(frameID FrameID) 
+        + Unpin(frameID FrameID) 
+        + Size() int
+
+    }
+    class "clockFrame" << (S,Aquamarine) >> {
+        - referenced bool
+        - inReplacer bool
+
+    }
+    class "concurrency.FrameID" << (T, #FF7700) >>  {
+    }
+}
+"__builtin__.uint32" #.. "concurrency.FrameID"
+
+"concurrency.IReplacer" <|-- "concurrency.ClockReplacer"
+"concurrency.IReplacer" <|-- "concurrency.LRUReplacer"
+
+
+@enduml

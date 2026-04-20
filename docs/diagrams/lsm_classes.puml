@@ -1,0 +1,124 @@
+@startuml
+namespace lsm {
+    class "BloomFilter" << (S,Aquamarine) >> {
+        - m uint
+        - k uint
+        - bitset []byte
+
+        + Add(data []byte) 
+        + Test(data []byte) bool
+
+    }
+    class "BloomFilterAllocator" << (S,Aquamarine) >> {
+        + T float64
+        + C float64
+        + TotalMemBudget uint
+        + NumLevels int
+
+        + AllocateBitsPerLevel(itemsPerLevel []uint) []uint
+        + CalculateOptimalFPR(levelIndex int) float64
+
+    }
+    interface "CompactionPolicy"  {
+        + GetCapacityLimit(level int, maxLevel int) int
+        + GetNumLevels(totalItems int) int
+
+    }
+    class "Entry" << (S,Aquamarine) >> {
+        + Key string
+        + Value []byte
+
+    }
+    class "GarneringCompactionPolicy" << (S,Aquamarine) >> {
+        + T float64
+        + C float64
+        + L0Capacity int
+        + MemtableB int
+
+        + GetCapacityLimit(level int, maxLevel int) int
+        + GetNumLevels(totalItems int) int
+
+    }
+    class "LSMTreeBackend" << (S,Aquamarine) >> {
+        - logManager log.ILogManager
+        - bufferManager buffer.IBufferPoolManager
+        - memtable *MemTable
+        - levels [][]*SSTable
+        - compactionPolicy CompactionPolicy
+        - ssTableIdCounter atomic.Uint64
+        - totalItems atomic.Int64
+        - compactionQueue []int
+        - queueMutex sync.Mutex
+        - memtableLock sync.RWMutex
+        - levelsLock sync.RWMutex
+
+        - flush() 
+        - compactIfNeeded() 
+        - queueLevelForCompaction(level int) 
+        - processCompactionQueue() 
+        - compactLevel(level int) 
+        - createSSTableFromSortedEntries(entries []Entry, tombstones []string) *SSTable
+
+        + Get(key []byte) ([]byte, error)
+        + Put(key []byte, value []byte) error
+        + Delete(key []byte) error
+        + Scan() ([]storage.ScanEntry, error)
+        + ReplayFromWAL(recoveryState *log.RecoveryState) error
+
+    }
+    class "MemTable" << (S,Aquamarine) >> {
+        - data <font color=blue>map</font>[string][]byte
+        - tombstones <font color=blue>map</font>[string]bool
+
+        + Put(key []byte, value []byte) 
+        + Get(key []byte) ([]byte, bool)
+        + Exists(key []byte) bool
+        + MarkTombstone(key []byte) 
+        + IsTombstoned(key []byte) bool
+
+    }
+    class "SSTable" << (S,Aquamarine) >> {
+        - id uint64
+        - data <font color=blue>map</font>[string][]byte
+        - tombstones <font color=blue>map</font>[string]bool
+        - bloomFilter *BloomFilter
+
+        + Get(key []byte) ([]byte, error)
+        + IsTombstoned(key []byte) bool
+
+    }
+    class "Tombstone" << (S,Aquamarine) >> {
+        + Deleted bool
+
+    }
+    class "iterHeap" << (S,Aquamarine) >> {
+        + Len() int
+        + Swap(i int, j int) 
+        + Less(i int, j int) bool
+        + Push(x any) 
+        + Pop() any
+
+    }
+    class "lsm.iterHeap" << (T, #FF7700) >>  {
+    }
+    class "sstableIter" << (S,Aquamarine) >> {
+        - keys []string
+        - vals [][]byte
+        - tombstones <font color=blue>map</font>[string]bool
+        - pos int
+        - priority int
+
+        - next() bool
+        - key() string
+        - val() []byte
+
+        + IsTombstoned() bool
+
+    }
+}
+"lsm.[]*sstableIter" #.. "lsm.iterHeap"
+
+"lsm.CompactionPolicy" <|-- "lsm.GarneringCompactionPolicy"
+
+
+@enduml
