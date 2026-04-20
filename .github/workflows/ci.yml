@@ -66,6 +66,12 @@ jobs:
         WITH_V: true
         DEFAULT_BUMP: patch # Increments 0.0.1 -> 0.0.2 automatically
 
+    - name: Normalize Docker Release Tag
+      id: docker_tag
+      run: |
+        NEW_TAG="${{ steps.tag_version.outputs.new_tag }}"
+        echo "version=${NEW_TAG#v}" >> "$GITHUB_OUTPUT"
+
     - name: Create Release Branch
       run: |
         git config user.name "github-actions[bot]"
@@ -101,6 +107,7 @@ jobs:
         file: ./Dockerfile
         push: true
         tags: |
+          ${{ secrets.DOCKERHUB_USERNAME }}/inesdb:${{ steps.docker_tag.outputs.version }}
           ${{ secrets.DOCKERHUB_USERNAME }}/inesdb:${{ steps.tag_version.outputs.new_tag }}
           ${{ secrets.DOCKERHUB_USERNAME }}/inesdb:latest
 
