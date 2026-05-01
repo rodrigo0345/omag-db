@@ -23,67 +23,58 @@ func (c *LSMCursor) Next() bool {
 		return false
 	}
 
-	// If we hit the limit, stop immediately
-	if c.opts.Limit > 0 && c.count >= c.opts.Limit {
-		return false
-	}
-
 	for c.h.Len() > 0 {
-		// Pop the iterator with the smallest key
+		// If opts.Reverse is true, the heap is a Max-Heap (returns largest key).
+		// If opts.Reverse is false, the heap is a Min-Heap (returns smallest key).
 		it := heap.Pop(c.h).(*sstableIter)
 		key := it.key()
 
-		// Check Upper Bound
-		if len(c.opts.UpperBound) > 0 {
-			cmp := bytes.Compare([]byte(key), c.opts.UpperBound)
-			// If key > upper, or (key == upper and !Inclusive), we are done
-			if cmp > 0 || (cmp == 0 && !c.opts.Inclusive) {
+		if c.opts.Reverse {
+			// In Reverse, we stop if we go BELOW the LowerBound
+			if len(c.opts.LowerBound) > 0 && bytes.Compare([]byte(key), c.opts.LowerBound) < 0 {
 				c.Close()
 				return false
 			}
+		} else {
+			// In Forward, we stop if we go ABOVE the UpperBound
+			if len(c.opts.UpperBound) > 0 {
+				cmp := bytes.Compare([]byte(key), c.opts.UpperBound)
+				if cmp > 0 || (cmp == 0 && !c.opts.Inclusive) {
+					c.Close()
+					return false
+				}
+			}
 		}
 
-		// Deduplication (LSM Shadowing)
-		isNewKey := !c.seenKeys[key]
-		if isNewKey {
-			c.seenKeys[key] = true
+		// We return EVERY version found.
+		c.currentEntry = storage.ScanEntry{
+			Key:   []byte(key),
+			Value: append([]byte(nil), it.val()...),
 		}
 
-		// Advance the sub-iterator and put back in heap if it has more
-		if it.next() {
+		// Advance the iterator in the correct direction
+		advanced := false
+		if c.opts.Reverse {
+			advanced = it.prev()
+		} else {
+			advanced = it.next()
+		}
+
+		if advanced {
 			heap.Push(c.h, it)
 		}
 
-		// If we've seen this key already, skip it (it's an older version)
-		if !isNewKey {
-			continue
-		}
-
-		// Filter Tombstones
-		if it.IsTombstoned() {
-			continue
-		}
-
-		// Build Entry (apply KeyOnly optimization)
-		entry := storage.ScanEntry{Key: []byte(key)}
-		if !c.opts.KeyOnly {
-			entry.Value = append([]byte(nil), it.val()...)
-		}
-
-		// Apply Complex Filter Pushdown
-		if c.opts.ComplexFilter != nil && !c.opts.ComplexFilter(entry) {
-			continue
-		}
-
-		// Handle Offset
 		if c.skipped < c.opts.Offset {
 			c.skipped++
 			continue
 		}
 
-		// Success: Capture entry and increment count
-		c.currentEntry = entry
 		c.count++
+		if c.opts.Limit > 0 && c.count > c.opts.Limit {
+			c.Close()
+			return false
+		}
+
 		return true
 	}
 

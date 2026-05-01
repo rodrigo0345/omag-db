@@ -1,25 +1,38 @@
 package lsm
 
-type iterHeap []*sstableIter
+type iterHeap struct {
+	iters   []*sstableIter
+	reverse bool // Controls heap direction
+}
 
-func (h iterHeap) Len() int      { return len(h) }
-func (h iterHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *iterHeap) Len() int      { return len(h.iters) }
+func (h *iterHeap) Swap(i, j int) { h.iters[i], h.iters[j] = h.iters[j], h.iters[i] }
 
-func (h iterHeap) Less(i, j int) bool {
-	ki, kj := h[i].key(), h[j].key()
+func (h *iterHeap) Less(i, j int) bool {
+	ki, kj := h.iters[i].key(), h.iters[j].key()
+
+	if h.reverse {
+		if ki != kj {
+			return ki > kj
+		}
+		return h.iters[i].priority > h.iters[j].priority
+	}
+
 	if ki != kj {
 		return ki < kj
 	}
-	return h[i].priority > h[j].priority
+	return h.iters[i].priority > h.iters[j].priority
 }
 
-func (h *iterHeap) Push(x any) { *h = append(*h, x.(*sstableIter)) }
+func (h *iterHeap) Push(x any) {
+	h.iters = append(h.iters, x.(*sstableIter))
+}
 
 func (h *iterHeap) Pop() any {
-	old := *h
+	old := h.iters
 	n := len(old)
 	it := old[n-1]
 	old[n-1] = nil
-	*h = old[:n-1]
+	h.iters = old[:n-1]
 	return it
 }

@@ -24,6 +24,11 @@ func (it *sstableIter) next() bool {
 	return it.pos < len(it.rows)
 }
 
+func (it *sstableIter) prev() bool {
+	it.pos--
+	return it.pos >= 0
+}
+
 func (it *sstableIter) key() string { return it.rows[it.pos].key }
 func (it *sstableIter) val() []byte { return it.rows[it.pos].value }
 
