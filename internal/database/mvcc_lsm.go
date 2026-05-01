@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sync"
 
 	"github.com/rodrigo0345/omag/internal/concurrency"
 	"github.com/rodrigo0345/omag/internal/storage"
@@ -22,44 +21,30 @@ import (
 )
 
 const (
-	DefaultBufferPoolSize   = 50
-	DefaultReplacerCapacity = 128
+	DefaultBufferPoolSize   = 2048
+	DefaultReplacerCapacity = 2048
 )
 
 // Options configures the default MVCC + LSM engine.
 type Options struct {
-	DBPath                 string
-	LSMDataDir             string
-	WALPath                string
-	BufferPoolSize         int
-	ReplacerCapacity       int
-	ReplicationConfig      synchronization.ReplicationConfig
-	ReplicationCoordinator synchronization.ReplicationCoordinator
+	DBPath           string
+	LSMDataDir       string
+	WALPath          string
+	BufferPoolSize   int
+	ReplacerCapacity int
 }
 
 // Engine provides a small, opinionated database entry point.
 // It prefers MVCC transaction handling with an LSM-tree storage backend.
-type Engine struct {
-	storageEngine     storage.IStorageEngine
-	lsmDataDir        string
-	replicationConfig synchronization.ReplicationConfig
-	replicator        synchronization.ReplicationCoordinator
-	replicationEnabled bool
-	isolationMgr      txn.IIsolationManager
-	bufferPool        buffer.IBufferPoolManager
-	diskMgr           *buffer.DiskManager
-	walMgr            log.ILogManager
-	schemaManager     *schema.SchemaManager
-	indexManagers     map[string]*schema.SecondaryIndexManager
-	tableEngines      map[string]storage.IStorageEngine
-	rollbackMgr       *rollback.RollbackManager
-	mu                sync.RWMutex
+type MVCCLSM struct {
+	isolationMgr txn.IIsolationManager
+	tableManager *schema.ITableManager
 }
 
-var _ Database = (*Engine)(nil)
+var _ Database = (*&MVCCLSM)(nil) // just to check if the interface is implemented correctly
 
 // OpenMVCCLSM opens a database engine using MVCC and an LSM-tree backend.
-func OpenMVCCLSM(opts Options) (_ *Engine, err error) {
+func OpenMVCCLSM(opts Options) (_ *MVCCLSM, err error) {
 	if opts.DBPath == "" {
 		opts.DBPath = filepath.Join("/var/data/inesdb/", "test.db")
 	}
@@ -75,33 +60,6 @@ func OpenMVCCLSM(opts Options) (_ *Engine, err error) {
 	if opts.ReplacerCapacity <= 0 {
 		opts.ReplacerCapacity = DefaultReplacerCapacity
 	}
-
-	replicationConfig := opts.ReplicationConfig
-	if replicationConfig.Strategy == "" {
-		replicationConfig = synchronization.DefaultReplicationConfig()
-	}
-	if replicationConfig.Backend == "" {
-		replicationConfig.Backend = synchronization.ReplicationBackendNoop
-	}
-	if err := replicationConfig.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid replication config: %w", err)
-	}
-
-	replicator := opts.ReplicationCoordinator
-	if replicator == nil {
-		replicator, err = synchronization.NewReplicationCoordinatorFromConfig(replicationConfig)
-		if err != nil {
-			return nil, fmt.Errorf("resolve replication coordinator: %w", err)
-		}
-	}
-	if err := replicator.Configure(replicationConfig); err != nil {
-		return nil, fmt.Errorf("configure replication coordinator: %w", err)
-	}
-	defer func() {
-		if err != nil && replicator != nil {
-			_ = replicator.Close()
-		}
-	}()
 
 	diskMgr, err := buffer.NewDiskManager(opts.DBPath)
 	if err != nil {
@@ -125,8 +83,7 @@ func OpenMVCCLSM(opts Options) (_ *Engine, err error) {
 	storageEngine := lsm.NewLSMTreeBackendWithDataDir(walMgr, bufferPool, opts.LSMDataDir)
 	rollbackMgr := rollback.NewRollbackManager(bufferPool)
 	writeHandler := write_handler.NewDefaultWriteHandler(storageEngine, rollbackMgr, bufferPool, walMgr)
-	replicationEnabled := replicationConfig.Backend != synchronization.ReplicationBackendNoop
-	writeHandler.SetReplicationIntentEnabled(replicationEnabled)
+	writeHandler.SetReplicationIntentEnabled(false)
 
 	indexManagers := make(map[string]*schema.SecondaryIndexManager)
 	tableEngines := make(map[string]storage.IStorageEngine)
@@ -139,23 +96,12 @@ func OpenMVCCLSM(opts Options) (_ *Engine, err error) {
 		indexManagers,
 	)
 
-	engine := &Engine{
-		storageEngine:     storageEngine,
-		lsmDataDir:        opts.LSMDataDir,
-		replicationConfig: replicationConfig,
-		replicator:        replicator,
-		replicationEnabled: replicationEnabled,
-		isolationMgr:      isolationMgr,
-		bufferPool:        bufferPool,
-		diskMgr:           diskMgr,
-		walMgr:            walMgr,
-		schemaManager:     schema.NewSchemaManager(storageEngine),
-		indexManagers:     indexManagers,
-		tableEngines:      tableEngines,
-		rollbackMgr:       rollbackMgr,
+	engine := &MVCCLSM{
+		isolationMgr: isolationMgr,
+		tableManager: schema.NewSchemaManager(storageEngine),
 	}
 
-	if tableNames, err := engine.schemaManager.LoadAllSchemas(); err != nil {
+	if tableNames, err := engine.tableManager.LoadAllSchemas(); err != nil {
 		return nil, err
 	} else {
 		for _, tableName := range tableNames {
@@ -298,11 +244,11 @@ func (e *Engine) RollbackManager() *rollback.RollbackManager {
 	return e.rollbackMgr
 }
 
-func (e *Engine) BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64 {
-	return e.isolationMgr.BeginTransaction(isolationLevel, tableName, tableSchema)
+func (e *Engine) BeginTransaction(isolationLevel uint8) int64 {
+	return e.isolationMgr.BeginTransaction(isolationLevel)
 }
 
-func (e *Engine) Read(txnID int64, key []byte) ([]byte, error) {
+func (e *Engine) Read(txnID int64, tableName string, key []byte) ([]byte, error) {
 	if e.replicationEnabled && e.replicator != nil {
 		tableName, _, _ := e.isolationMgr.GetTransactionTableContext(txnID)
 		if err := e.replicator.SynchronizeRead(context.Background(), txnID, tableName, key); err != nil {
@@ -312,32 +258,19 @@ func (e *Engine) Read(txnID int64, key []byte) ([]byte, error) {
 	return e.isolationMgr.Read(txnID, key)
 }
 
-func (e *Engine) Scan(lower []byte, upper []byte) ([]storage.ScanEntry, error) {
+func (e *Engine) Scan(txnID int64, lower []byte, upper []byte, filterCallback storage.RowFilterFunction) ([]storage.ScanEntry, error) {
 	if e == nil || e.storageEngine == nil {
 		return nil, fmt.Errorf("storage engine is nil")
 	}
 
-	e.mu.RLock()
-	tableEngines := make([]storage.IStorageEngine, 0, len(e.tableEngines))
-	for _, engine := range e.tableEngines {
-		tableEngines = append(tableEngines, engine)
-	}
-	e.mu.RUnlock()
+	tableName, _, _ := e.isolationMgr.GetTransactionTableContext(txnID)
 
-	if len(tableEngines) == 0 {
-		return e.storageEngine.Scan(lower, upper)
+	tableEngine := e.tableStorageEngine(tableName)
+	entries, err := tableEngine.Scan(lower, upper, filterCallback)
+	if err != nil {
+		return nil, fmt.Errorf("scan failed: %w", err)
 	}
-
-	results := make([]storage.ScanEntry, 0)
-	for _, engine := range tableEngines {
-		entries, err := engine.Scan(lower, upper)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, entries...)
-	}
-
-	return results, nil
+	return entries, nil
 }
 
 func (e *Engine) Write(txnID int64, key []byte, value []byte) error {
@@ -513,4 +446,12 @@ func (e *Engine) GetIndexManager(tableName string) (*schema.SecondaryIndexManage
 	defer e.mu.RUnlock()
 	mgr, ok := e.indexManagers[tableName]
 	return mgr, ok
+}
+
+func (e *Engine) Partition(tableName string, partitionKey string) error {
+	panic("Not implemented")
+}
+
+func (e *Engine) Replicate(tableName string, targetNodeID string) error {
+	panic("Not implemented")
 }

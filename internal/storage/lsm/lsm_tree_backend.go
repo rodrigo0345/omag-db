@@ -42,6 +42,8 @@ type LSMTreeBackend struct {
 	levelsLock   sync.RWMutex
 }
 
+var _ storage.IStorageEngine = (*LSMTreeBackend)(nil) // compile-time check for interface implementation
+
 // SSTableMetadata represents persisted SSTable information
 type SSTableMetadata struct {
 	ID    uint64 `json:"id"`
@@ -398,80 +400,57 @@ func (l *LSMTreeBackend) Delete(key []byte) error {
 	return nil
 }
 
-func (l *LSMTreeBackend) Scan(lower []byte, upper []byte) ([]storage.ScanEntry, error) {
-	var results []storage.ScanEntry
-	seenKeys := make(map[string]bool)
-	hasLower := len(lower) > 0
-	hasUpper := len(upper) > 0
-	lowerBound := string(lower)
-	upperBound := string(upper)
-
-	if hasLower && hasUpper && lowerBound > upperBound {
-		return nil, fmt.Errorf("lower bound %q is greater than upper bound %q", lower, upper)
+func (l *LSMTreeBackend) Scan(opts storage.ScanOptions) (storage.ICursor, error) {
+	// Initial Bound Validation
+	if len(opts.LowerBound) > 0 && len(opts.UpperBound) > 0 {
+		if bytes.Compare(opts.LowerBound, opts.UpperBound) > 0 {
+			return nil, fmt.Errorf("lower bound greater than upper bound")
+		}
 	}
 
+	// Gather Iterators (Thread-Safe collection)
 	l.memtableLock.RLock()
 	memtableIter := newSSTableIter(&SSTable{
 		data:       l.memtable.data,
 		tombstones: l.memtable.tombstones,
-	}, 1000000)
+	}, 1)
 	l.memtableLock.RUnlock()
 
 	l.levelsLock.RLock()
-	allTables := make([]*SSTable, 0)
-	for lvl := 0; lvl < len(l.levels); lvl++ {
-		for _, ss := range l.levels[lvl] {
-			allTables = append(allTables, ss)
-		}
+	var allTables []*SSTable
+	for _, level := range l.levels {
+		allTables = append(allTables, level...)
 	}
 	l.levelsLock.RUnlock()
 
-	iters := make([]*sstableIter, 0, len(allTables)+1)
-	iters = append(iters, memtableIter)
-	for priority, ss := range allTables {
-		iters = append(iters, newSSTableIter(ss, len(allTables)-priority))
-	}
-
 	h := &iterHeap{}
-	for _, it := range iters {
-		if it.next() {
-			heap.Push(h, it)
-		}
+
+	if memtableIter.next() {
+		heap.Push(h, memtableIter)
 	}
 
-	for h.Len() > 0 {
-		it := heap.Pop(h).(*sstableIter)
-		key := it.key()
-
-		if hasUpper && key > upperBound {
-			break
-		}
-		if hasLower && key < lowerBound {
-			if it.next() {
+	for i, ss := range allTables {
+		it := newSSTableIter(ss, len(allTables)-i)
+		if it.next() {
+			// Optimization: Seek to lower bound early
+			if len(opts.LowerBound) > 0 {
+				for string(it.key()) < string(opts.LowerBound) {
+					if !it.next() {
+						break
+					}
+				}
+			}
+			if it.key() != "" {
 				heap.Push(h, it)
 			}
-			continue
-		}
-
-		if !seenKeys[key] {
-			seenKeys[key] = true
-
-			if !it.IsTombstoned() {
-				keyCopy := []byte(key)
-				valueCopy := append([]byte(nil), it.val()...)
-				results = append(results, storage.ScanEntry{
-					Key:   keyCopy,
-					Value: valueCopy,
-				})
-			}
-		}
-
-		if it.next() {
-			heap.Push(h, it)
 		}
 	}
 
-	return results, nil
+	return &LSMCursor{
+		h:        h,
+		opts:     opts,
+		seenKeys: make(map[string]bool),
+	}, nil
 }
 
 func (l *LSMTreeBackend) ReplayFromWAL(recoveryState *log.RecoveryState) error {

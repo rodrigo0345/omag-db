@@ -5,7 +5,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/storage/schema"
 	"github.com/rodrigo0345/omag/internal/txn/log"
@@ -21,9 +20,7 @@ type MVCCManager struct {
 	bufferManager   buffer.IBufferPoolManager
 	writeHandler    write_handler.IWriteHandler
 	rollbackManager *rollback.RollbackManager
-	primaryIndex    storage.IStorageEngine
-	storageResolver func(tableName string) storage.IStorageEngine
-	indexManagers   map[string]*schema.SecondaryIndexManager
+	tableManager    schema.ITableManager
 	nextTxnID       atomic.Int64
 	indexSnapshots  map[TransactionID]map[string]string
 }
@@ -33,8 +30,7 @@ func NewMVCCManager(
 	bufferMgr buffer.IBufferPoolManager,
 	writeHandler write_handler.IWriteHandler,
 	rollbackMgr *rollback.RollbackManager,
-	primaryIndex storage.IStorageEngine,
-	indexManagers map[string]*schema.SecondaryIndexManager,
+	tableManager schema.ITableManager,
 ) *MVCCManager {
 	return &MVCCManager{
 		transactions:    make(map[TransactionID]*txn_unit.Transaction),
@@ -42,25 +38,9 @@ func NewMVCCManager(
 		bufferManager:   bufferMgr,
 		writeHandler:    writeHandler,
 		rollbackManager: rollbackMgr,
-		primaryIndex:    primaryIndex,
-		indexManagers:   indexManagers,
+		tableManager:    tableManager,
 		indexSnapshots:  make(map[TransactionID]map[string]string),
 	}
-}
-
-func (m *MVCCManager) SetStorageResolver(resolver func(tableName string) storage.IStorageEngine) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.storageResolver = resolver
-}
-
-func (m *MVCCManager) resolveStorageEngine(tableName string) storage.IStorageEngine {
-	if m.storageResolver != nil {
-		if engine := m.storageResolver(tableName); engine != nil {
-			return engine
-		}
-	}
-	return m.primaryIndex
 }
 
 func (m *MVCCManager) BeginTransaction(isolationLevel uint8, tableName string, tableSchema *schema.TableSchema) int64 {

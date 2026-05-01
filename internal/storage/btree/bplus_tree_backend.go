@@ -361,7 +361,7 @@ func (b *BPlusTreeBackend) Delete(key []byte) error {
 	return nil
 }
 
-func (b *BPlusTreeBackend) Scan(lower []byte, upper []byte) ([]storage.ScanEntry, error) {
+func (b *BPlusTreeBackend) Scan(lower []byte, upper []byte, filterBackend storage.RowFilterFunction) ([]storage.ScanEntry, error) {
 	var results []storage.ScanEntry
 
 	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) > 0 {
@@ -413,6 +413,12 @@ func (b *BPlusTreeBackend) Scan(lower []byte, upper []byte) ([]storage.ScanEntry
 
 			keyCopy := append([]byte(nil), cell.Key...)
 			valueCopy := append([]byte(nil), cell.Value...)
+			scanEntry := storage.ScanEntry{Key: keyCopy, Value: valueCopy}
+
+			if filterBackend != nil && !filterBackend(scanEntry) {
+				continue
+			}
+
 			results = append(results, storage.ScanEntry{Key: keyCopy, Value: valueCopy})
 		}
 
