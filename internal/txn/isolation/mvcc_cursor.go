@@ -48,3 +48,4 @@ func (c *MVCCCursor) Next() bool {
 
 func (c *MVCCCursor) Entry() storage.ScanEntry { return c.currentEntry }
 func (c *MVCCCursor) Close() error             { return c.raw.Close() }
+func (c *MVCCCursor) Error() error             { return c.raw.Error() }

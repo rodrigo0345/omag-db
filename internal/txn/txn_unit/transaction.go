@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
-	"github.com/rodrigo0345/omag/internal/storage/schema"
 	"github.com/rodrigo0345/omag/internal/txn/log"
 	"github.com/rodrigo0345/omag/internal/txn/undo"
 )
@@ -27,21 +26,20 @@ const (
 )
 
 type Transaction struct {
-	txnID            uint64
-	state            TxnState
-	sharedLocks      [][]byte
-	exclusiveLocks   [][]byte
-	lockMu           sync.Mutex
-	undoLog          *undo.UndoLog
-	isolationLevel   uint8
-	tableName        string
-	tableSchema      *schema.TableSchema
-	readSet          map[string]struct{}
-	writeSet         map[string]struct{}
-	touchedTables    map[string]struct{}
-	cleanupCallbacks []func() error
-	operations       []log.RecoveryOperation // Operations for crash recovery
-	txn_write_prefix string                  // used to manage isolation level copies
+	txnID             uint64
+	snapshotActiveTxn map[int64]bool // stores active transactions at the time of transaction start for visibility checks
+	state             TxnState
+	sharedLocks       [][]byte
+	exclusiveLocks    [][]byte
+	lockMu            sync.Mutex
+	undoLog           *undo.UndoLog
+	isolationLevel    uint8
+	readSet           map[string]struct{}
+	writeSet          map[string]struct{}
+	touchedTables     map[string]struct{}
+	cleanupCallbacks  []func() error
+	operations        []log.RecoveryOperation // Operations for crash recovery
+	txn_write_prefix  string                  // used to manage isolation level copies
 }
 
 func NewTransaction(txnID uint64, isolationLevel uint8) *Transaction {
@@ -63,6 +61,32 @@ func NewTransaction(txnID uint64, isolationLevel uint8) *Transaction {
 
 func (t *Transaction) GetID() uint64 {
 	return t.txnID
+}
+
+func (t *Transaction) SetSnapshot(snapshotTxnIDs []int64) {
+	t.snapshotActiveTxn = make(map[int64]bool, len(snapshotTxnIDs))
+	for _, id := range snapshotTxnIDs {
+		t.snapshotActiveTxn[id] = true
+	}
+}
+
+func (t *Transaction) IsVisibleInSnapshot(xmin int64) bool {
+	// Future transactions are invisible
+	if xmin > int64(t.txnID) {
+		return false
+	}
+
+	// Own writes are always visible
+	if xmin == int64(t.txnID) {
+		return true
+	}
+
+	// If xmin is in this map, it was still running (uncommitted) when we started.
+	// Therefore, its changes are invisible to this transaction.
+	if _, active := t.snapshotActiveTxn[xmin]; active {
+		return false
+	}
+	return true
 }
 
 func (t *Transaction) RecordOperation(op undo.Operation) error {
@@ -99,18 +123,6 @@ func (t *Transaction) GetUndoLog() *undo.UndoLog {
 
 func (t *Transaction) GetIsolationLevel() uint8 {
 	return t.isolationLevel
-}
-
-func (t *Transaction) SetTableContext(tableName string, tableSchema *schema.TableSchema) {
-	t.tableName = tableName
-	t.tableSchema = tableSchema
-	if tableName != "" {
-		t.RecordTableAccess(tableName)
-	}
-}
-
-func (t *Transaction) GetTableContext() (string, *schema.TableSchema) {
-	return t.tableName, t.tableSchema
 }
 
 func (t *Transaction) RecordTableAccess(tableName string) {

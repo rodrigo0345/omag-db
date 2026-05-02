@@ -73,11 +73,10 @@ func main() {
 	applog.Info("[PGSERVER] starting OMAG pgwire server listen=%s db=%s lsm=%s wal=%s replication=%s/%s local=%s peers=%d debug=%v", *listenAddr, *dbPath, *lsmDataDir, *walPath, cfg.Strategy, cfg.Backend, cfg.LocalNodeID, 1, *debug)
 
 	engine, err := database.OpenMVCCLSM(database.Options{
-		DBPath:                 *dbPath,
-		LSMDataDir:             *lsmDataDir,
-		WALPath:                *walPath,
-		ReplicationConfig:      cfg,
-		ReplicationCoordinator: replicator,
+		DBPath:            *dbPath,
+		LSMDataDir:        *lsmDataDir,
+		WALPath:           *walPath,
+		ReplicationConfig: cfg,
 	})
 	if err != nil {
 		if _, writeErr := fmt.Fprintln(os.Stderr, "failed to open database:", err); writeErr != nil {

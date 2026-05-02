@@ -1,8 +1,11 @@
 package mocks
 
 import (
+	"bytes"
+	"sort"
 	"sync"
 
+	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/page"
 	"github.com/rodrigo0345/omag/internal/txn/log"
 )
@@ -31,7 +34,7 @@ func (m *MockLogManager) Checkpoint() error {
 	return nil
 }
 
-func (m*MockLogManager) CleanupTransactionOperations(txnID uint64) {
+func (m *MockLogManager) CleanupTransactionOperations(txnID uint64) {
 }
 
 func (m *MockLogManager) GetTransactionOperations(txnID uint64) []log.RecoveryOperation {
@@ -134,5 +137,114 @@ func (m *MockBufferManager) FlushAll() error {
 }
 
 func (m *MockBufferManager) Close() error {
+	return nil
+}
+
+// MockStorageEngine simulates a sorted storage backend (B-Tree/LSM)
+type MockStorageEngine struct {
+	data map[string][]byte
+}
+
+func NewMockStorage() *MockStorageEngine {
+	return &MockStorageEngine{
+		data: make(map[string][]byte),
+	}
+}
+
+func (m *MockStorageEngine) Put(key []byte, value []byte) error {
+	m.data[string(key)] = value
+	return nil
+}
+
+func (m *MockStorageEngine) Get(key []byte) ([]byte, error) {
+	val, ok := m.data[string(key)]
+	if !ok {
+		return nil, nil
+	}
+	return val, nil
+}
+
+func (m *MockStorageEngine) Delete(key []byte) error {
+	delete(m.data, string(key))
+	return nil
+}
+
+func (m *MockStorageEngine) Scan(opts storage.ScanOptions) (storage.ICursor, error) {
+	// 1. Extract and sort keys to simulate B-Tree/LSM leaf order
+	keys := make([]string, 0, len(m.data))
+	for k := range m.data {
+		keys = append(keys, k)
+	}
+
+	if opts.Reverse {
+		sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+	} else {
+		sort.Strings(keys)
+	}
+
+	// 2. Filter by boundaries
+	var entries []storage.ScanEntry
+	for _, k := range keys {
+		keyBytes := []byte(k)
+
+		// Lower Bound Check
+		if opts.LowerBound != nil {
+			cmp := bytes.Compare(keyBytes, opts.LowerBound)
+			if cmp < 0 {
+				continue
+			}
+		}
+
+		// Upper Bound Check
+		if opts.UpperBound != nil {
+			cmp := bytes.Compare(keyBytes, opts.UpperBound)
+			if opts.Inclusive {
+				if cmp > 0 {
+					break
+				}
+			} else {
+				if cmp >= 0 {
+					break
+				}
+			}
+		}
+
+		entries = append(entries, storage.ScanEntry{
+			Key:   keyBytes,
+			Value: m.data[k],
+		})
+	}
+
+	return &MockCursor{entries: entries, index: -1}, nil
+}
+
+// MockCursor implements storage.ICursor
+type MockCursor struct {
+	entries []storage.ScanEntry
+	index   int
+	err     error
+}
+
+func (c *MockCursor) Next() bool {
+	if c.index+1 < len(c.entries) {
+		c.index++
+		return true
+	}
+	return false
+}
+
+func (c *MockCursor) Entry() storage.ScanEntry {
+	if c.index < 0 || c.index >= len(c.entries) {
+		return storage.ScanEntry{}
+	}
+	return c.entries[c.index]
+}
+
+func (c *MockCursor) Error() error {
+	return c.err
+}
+
+func (c *MockCursor) Close() error {
+	c.entries = nil
 	return nil
 }

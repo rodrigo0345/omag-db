@@ -35,12 +35,6 @@ func (s *Select) exec(txnID int64, parsedSql *ast.SelectStatement) ExecutionResu
 		return res
 	}
 
-	entries, err := engine.Scan(nil, nil)
-	if err != nil {
-		res.Err = fmt.Errorf("scan failed: %w", err)
-		return res
-	}
-
 	res.Messages = append(res.Messages, s.buildRowDescription(targetCols))
 
 	// 2. Add DataRows

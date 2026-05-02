@@ -19,13 +19,31 @@ type IndexDefinition struct {
 
 type ITableSchema interface {
 	GetName() string
-	GetPrimaryKey() []string
-	GetColumns() map[string]string
-	GetIndexes() map[string][]string
-	GetIndexedStorage(column []string) storage.IStorageEngine // can return nil if the column is not indexed
-	SetIndexedStorage(column []string, engine storage.IStorageEngine)
-	GetAllStorages() []storage.IStorageEngine
+	GetColumns() []Column
+	AddIndex(name string, columns []string, engine storage.IStorageEngine)
+	GetIndex(name string) *Index
+	GetAllIndexes() []*Index
 	ToJSON() ([]byte, error)
+	ExtractIndexValues(value []byte) (map[string][]byte, error)
+	GetIndexesByColumn(columnName string) []*Index
+}
+
+type WriteOperation struct {
+	TableName string
+	Key       []byte
+	Value     []byte
+}
+
+type DeleteOperation struct {
+	TableName   string
+	Key         []byte
+	BeforeImage []byte // The old payload required to purge secondary index entries
+}
+
+type ReadOperation struct {
+	TableName string
+	IndexName string
+	Key       []byte
 }
 
 type ITableManager interface {
@@ -33,4 +51,11 @@ type ITableManager interface {
 	DropTable(tableName string) error
 	CreateIndex(tableName string, index IndexDefinition, indexStorage storage.IStorageEngine) error
 	GetTableSchema(tableName string) (ITableSchema, error)
+	GetAllTables() []string
+
+	Write(op WriteOperation) error
+	Delete(op DeleteOperation) error
+
+	Scan(tableName string, indexName string, opts storage.ScanOptions) (storage.ICursor, error)
+	FullTableScan(tableName string, opts storage.ScanOptions) (storage.ICursor, error)
 }

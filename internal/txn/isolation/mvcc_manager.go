@@ -42,7 +42,7 @@ func NewMVCCManager(
 	rollbackMgr *rollback.RollbackManager,
 	tableManager schema.ITableManager,
 ) *MVCCManager {
-	return &MVCCManager{
+	mvcc := &MVCCManager{
 		transactions:    make(map[TransactionID]*txn_unit.Transaction),
 		committedTxns:   make(map[int64]bool),
 		logManager:      logMgr,
@@ -51,11 +51,11 @@ func NewMVCCManager(
 		rollbackManager: rollbackMgr,
 		tableManager:    tableManager,
 	}
-}
 
-// ----------------------------------------------------------------------------
-// Transaction Lifecycle
-// ----------------------------------------------------------------------------
+	// TODO: add compaction
+
+	return mvcc
+}
 
 func (m *MVCCManager) BeginTransaction(isolationLevel uint8) int64 {
 	m.mu.Lock()
@@ -116,10 +116,6 @@ func (m *MVCCManager) Abort(txnID int64) error {
 
 	return m.rollbackManager.RollbackTransaction(txn, nil, nil)
 }
-
-// ----------------------------------------------------------------------------
-// Data Operations
-// ----------------------------------------------------------------------------
 
 func (m *MVCCManager) Read(txnID int64, target storage.IStorageEngine, key []byte) ([]byte, error) {
 	// Point read executes as a range scan for [UserKey + \x00 + 0] to [UserKey + \x00 + ^0]
@@ -199,11 +195,7 @@ func (m *MVCCManager) Scan(txnID int64, target storage.IStorageEngine, opts stor
 	}, nil
 }
 
-// ----------------------------------------------------------------------------
-// Compaction
-// ----------------------------------------------------------------------------
-
-func (m *MVCCManager) Compaction(target storage.IStorageEngine) error {
+func (m *MVCCManager) compaction(target storage.IStorageEngine) error {
 	m.mu.RLock()
 	minActiveID := int64(math.MaxInt64)
 	for id := range m.transactions {
@@ -260,10 +252,6 @@ func (m *MVCCManager) Compaction(target storage.IStorageEngine) error {
 	return nil
 }
 
-// ----------------------------------------------------------------------------
-// Helpers
-// ----------------------------------------------------------------------------
-
 func (m *MVCCManager) isVisible(txn *txn_unit.Transaction, xmin uint64) bool {
 	if xmin == txn.GetID() {
 		return true
@@ -273,10 +261,10 @@ func (m *MVCCManager) isVisible(txn *txn_unit.Transaction, xmin uint64) bool {
 	committed := m.committedTxns[int64(xmin)]
 	m.mu.RUnlock()
 
-	switch txn.IsolationLevel() {
-	case 1: // Read Committed
+	switch txn.GetIsolationLevel() {
+	case txn_unit.READ_COMMITTED:
 		return committed
-	case 2: // Repeatable Read
+	case txn_unit.REPEATABLE_READ:
 		if !committed || xmin > txn.GetID() {
 			return false
 		}
