@@ -18,14 +18,17 @@ type IndexDefinition struct {
 }
 
 type ITableSchema interface {
+	AddIndex(name string, columns []string, engine storage.IStorageEngine)
+
 	GetName() string
 	GetColumns() []Column
-	AddIndex(name string, columns []string, engine storage.IStorageEngine)
 	GetIndex(name string) *Index
 	GetAllIndexes() []*Index
+	GetIndexesByColumn(columnName string) []*Index
+	GetColumnValue(columnName string, row []byte) ([]byte, error)
+
 	ToJSON() ([]byte, error)
 	ExtractIndexValues(value []byte) (map[string][]byte, error)
-	GetIndexesByColumn(columnName string) []*Index
 }
 
 type WriteOperation struct {

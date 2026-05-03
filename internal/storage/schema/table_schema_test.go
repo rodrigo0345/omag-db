@@ -34,6 +34,7 @@ func TestTableManager_WritePropagation(t *testing.T) {
 
 	// Mock data: id=1, age=25, name="Bob"
 	payload := bytes.Join([][]byte{
+		{0x01}, // metadata
 		buildInt32(1),
 		buildInt32(25),
 		buildString("Bob"),
@@ -108,9 +109,14 @@ func TestTableManager_TwoHopScanAndFiltering(t *testing.T) {
 	// Scan 'idx_age' for Age > 28
 	opts := storage.ScanOptions{
 		ComplexFilter: storage.RowFilterFunction(func(row storage.ScanEntry) bool {
-			// Based on your RowFilterFunction definition: RowFilterFunction func(row ScanEntry) bool
-			// Row Value: [ID (4 bytes)] + [AGE (4 bytes)] + [NAME]
-			age := binary.BigEndian.Uint32(row.Value[4:8])
+			// Contact the schema to get the raw bytes for the "age" column
+			ageBytes, err := ts.GetColumnValue("age", row.Value)
+			if err != nil {
+				return false
+			}
+
+			// ageBytes now contains exactly the 4 bytes of the Int32
+			age := int32(binary.BigEndian.Uint32(ageBytes))
 			return age > 28
 		}),
 	}
@@ -150,6 +156,8 @@ func buildString(s string) []byte {
 
 func buildRow(values ...interface{}) []byte {
 	buf := new(bytes.Buffer)
+	buf.WriteByte(0x01) // OpInsert for the metadata column
+
 	for _, v := range values {
 		switch t := v.(type) {
 		case int32:
@@ -226,12 +234,20 @@ func TestTableManager_ScanPagination(t *testing.T) {
 	}
 
 	cursor, _ := tm.Scan("players", "idx_score", opts)
+	ts, err := tm.GetTableSchema("players")
+	if err != nil {
+		t.Fatalf("Failed to get table schema: %v", err)
+	}
+
 	defer cursor.Close()
 
 	var results []int32
 	for cursor.Next() {
 		entry := cursor.Entry()
-		score := int32(binary.BigEndian.Uint32(entry.Value[4:8]))
+		score, err := ts.GetColumnValue("score", entry.Value)
+		if err != nil {
+			t.Fatalf("Failed to extract score: %v", err)
+		}
 		results = append(results, score)
 	}
 

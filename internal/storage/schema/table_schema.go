@@ -11,8 +11,11 @@ import (
 
 type DataType uint8
 
+const TRANSACTIONAL_OP = "_txn_op"
+
 const (
-	TypeInt32 DataType = iota
+	TypeMetadata DataType = iota // Internal 1-byte column for transactional OpCodes
+	TypeInt32
 	TypeInt64
 	TypeFloat64
 	TypeBool
@@ -38,9 +41,14 @@ type TableSchema struct {
 }
 
 func NewTableSchema(name string, columns []Column) *TableSchema {
+
+	actualColumns := append([]Column{
+		{Name: TRANSACTIONAL_OP, Type: TypeMetadata},
+	}, columns...)
+
 	return &TableSchema{
 		Name:    name,
-		Columns: columns,
+		Columns: actualColumns,
 		Indexes: make(map[string]*Index),
 	}
 }
@@ -50,7 +58,10 @@ func (ts *TableSchema) GetName() string {
 }
 
 func (ts *TableSchema) GetColumns() []Column {
-	return ts.Columns
+	if len(ts.Columns) <= 1 {
+		return nil
+	}
+	return ts.Columns[1:]
 }
 
 func (ts *TableSchema) AddIndex(name string, columns []string, engine storage.IStorageEngine) {
@@ -117,7 +128,7 @@ func MinRowSize(columns []Column) int {
 			size += 4
 		case TypeInt64, TypeFloat64:
 			size += 8
-		case TypeBool:
+		case TypeBool, TypeMetadata:
 			size += 1
 		case TypeString:
 			size += 4
@@ -145,7 +156,7 @@ func (ts *TableSchema) ExtractIndexValues(value []byte) (map[string][]byte, erro
 			offset += 4
 		case TypeInt64, TypeFloat64:
 			offset += 8
-		case TypeBool:
+		case TypeBool, TypeMetadata:
 			offset += 1
 		case TypeString:
 			if offset+4 > payloadLen {
@@ -168,6 +179,7 @@ func (ts *TableSchema) ExtractIndexValues(value []byte) (map[string][]byte, erro
 		for _, colName := range idx.Columns {
 			b, ok := colBytes[colName]
 			if !ok {
+				// Safety check: users should not index the dummy column
 				return nil, fmt.Errorf("indexed column %q not found in schema", colName)
 			}
 			keyBuf = append(keyBuf, b...)
@@ -176,6 +188,46 @@ func (ts *TableSchema) ExtractIndexValues(value []byte) (map[string][]byte, erro
 	}
 
 	return indexValues, nil
+}
+
+func (ts *TableSchema) GetColumnValue(columnName string, row []byte) ([]byte, error) {
+	offset := 0
+	payloadLen := len(row)
+
+	for i := range ts.Columns {
+		col := &ts.Columns[i]
+		start := offset
+
+		// Calculate size of current column
+		var size int
+		switch col.Type {
+		case TypeMetadata, TypeBool:
+			size = 1
+		case TypeInt32:
+			size = 4
+		case TypeInt64, TypeFloat64:
+			size = 8
+		case TypeString:
+			if offset+4 > payloadLen {
+				return nil, fmt.Errorf("truncated string header for %s", col.Name)
+			}
+			strLen := int(binary.BigEndian.Uint32(row[offset : offset+4]))
+			size = 4 + strLen
+		}
+
+		if offset+size > payloadLen {
+			return nil, fmt.Errorf("row data too short for column %s", col.Name)
+		}
+
+		// If this is the column we want, return its slice
+		if col.Name == columnName {
+			return row[start : offset+size], nil
+		}
+
+		offset += size
+	}
+
+	return nil, fmt.Errorf("column %s not found in schema", columnName)
 }
 
 func ValidateRowFormat(columns []Column, value []byte) *RowFormatError {
@@ -191,6 +243,14 @@ func ValidateRowFormat(columns []Column, value []byte) *RowFormatError {
 		col := &columns[i]
 
 		switch col.Type {
+		case TypeMetadata:
+			// Just ensure the byte exists. We don't restrict the value
+			// because it can be OpInsert (0x01) or OpDelete (0x02).
+			if offset+1 > payloadLen {
+				return &RowFormatError{col.Name, "missing metadata", "expected 1 byte"}
+			}
+			offset += 1
+
 		case TypeInt32:
 			if offset+4 > payloadLen {
 				return &RowFormatError{col.Name, "missing data", "expected 4 bytes for Int32"}

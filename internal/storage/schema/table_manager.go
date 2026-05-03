@@ -316,7 +316,7 @@ func extractProjectedColumns(schemaCols []Column, value []byte, projection []str
 			offset += 4
 		case TypeInt64, TypeFloat64:
 			offset += 8
-		case TypeBool:
+		case TypeBool, TypeMetadata:
 			offset += 1
 		case TypeString:
 			if offset+4 > payloadLen {
