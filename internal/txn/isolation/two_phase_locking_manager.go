@@ -16,8 +16,6 @@ import (
 	"github.com/rodrigo0345/omag/internal/txn/write_handler"
 )
 
-type TransactionID uint64
-
 // DEPRECATED: This is a simplified 2PL manager for demonstration purposes. It does not handle deadlocks, timeouts, or other complexities of a production-grade 2PL implementation.
 type TwoPhaseLockingManager struct {
 	mu              sync.RWMutex

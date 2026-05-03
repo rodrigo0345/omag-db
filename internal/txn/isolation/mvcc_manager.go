@@ -11,10 +11,10 @@ import (
 	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/storage/schema"
+	"github.com/rodrigo0345/omag/internal/txn"
 	"github.com/rodrigo0345/omag/internal/txn/log"
 	"github.com/rodrigo0345/omag/internal/txn/rollback"
 	"github.com/rodrigo0345/omag/internal/txn/txn_unit"
-	"github.com/rodrigo0345/omag/internal/txn/write_handler"
 )
 
 const (
@@ -25,11 +25,10 @@ const (
 
 type MVCCManager struct {
 	mu              sync.RWMutex
-	transactions    map[TransactionID]*txn_unit.Transaction
-	committedTxns   map[int64]bool
+	transactions    map[txn.TransactionID]*txn_unit.Transaction
+	committedTxns   map[txn.TransactionID]bool
 	logManager      log.ILogManager
 	bufferManager   buffer.IBufferPoolManager
-	writeHandler    write_handler.IWriteHandler
 	rollbackManager *rollback.RollbackManager
 	tableManager    schema.ITableManager
 	nextTxnID       atomic.Int64
@@ -38,16 +37,14 @@ type MVCCManager struct {
 func NewMVCCManager(
 	logMgr log.ILogManager,
 	bufferMgr buffer.IBufferPoolManager,
-	writeHandler write_handler.IWriteHandler,
 	rollbackMgr *rollback.RollbackManager,
 	tableManager schema.ITableManager,
 ) *MVCCManager {
 	mvcc := &MVCCManager{
-		transactions:    make(map[TransactionID]*txn_unit.Transaction),
-		committedTxns:   make(map[int64]bool),
+		transactions:    make(map[txn.TransactionID]*txn_unit.Transaction),
+		committedTxns:   make(map[txn.TransactionID]bool),
 		logManager:      logMgr,
 		bufferManager:   bufferMgr,
-		writeHandler:    writeHandler,
 		rollbackManager: rollbackMgr,
 		tableManager:    tableManager,
 	}
@@ -71,13 +68,13 @@ func (m *MVCCManager) BeginTransaction(isolationLevel uint8) int64 {
 	}
 	transaction.SetSnapshot(activeIDs)
 
-	m.transactions[TransactionID(txnID)] = transaction
+	m.transactions[txn.TransactionID(txnID)] = transaction
 	return txnID
 }
 
-func (m *MVCCManager) Commit(txnID int64) error {
+func (m *MVCCManager) Commit(txnID txn.TransactionID) error {
 	m.mu.Lock()
-	txn, ok := m.transactions[TransactionID(txnID)]
+	txn, ok := m.transactions[txn.TransactionID(txnID)]
 	if !ok {
 		m.mu.Unlock()
 		return fmt.Errorf("transaction %d not found", txnID)
@@ -95,15 +92,15 @@ func (m *MVCCManager) Commit(txnID int64) error {
 	}
 
 	m.mu.Lock()
-	delete(m.transactions, TransactionID(txnID))
+	delete(m.transactions, txnID)
 	m.mu.Unlock()
 	return nil
 }
 
-func (m *MVCCManager) Abort(txnID int64) error {
+func (m *MVCCManager) Abort(txnID txn.TransactionID) error {
 	m.mu.Lock()
-	txn, ok := m.transactions[TransactionID(txnID)]
-	delete(m.transactions, TransactionID(txnID))
+	txn, ok := m.transactions[txn.TransactionID(txnID)]
+	delete(m.transactions, txnID)
 	m.mu.Unlock()
 
 	if !ok {
@@ -117,7 +114,7 @@ func (m *MVCCManager) Abort(txnID int64) error {
 	return m.rollbackManager.RollbackTransaction(txn, nil, nil)
 }
 
-func (m *MVCCManager) Read(txnID int64, target storage.IStorageEngine, key []byte) ([]byte, error) {
+func (m *MVCCManager) Read(txnID txn.TransactionID, tableName, indexName string, key []byte) ([]byte, error) {
 	// Point read executes as a range scan for [UserKey + \x00 + 0] to [UserKey + \x00 + ^0]
 	opts := storage.ScanOptions{
 		LowerBound: m.encodeKey(key, math.MaxUint64),
@@ -125,7 +122,7 @@ func (m *MVCCManager) Read(txnID int64, target storage.IStorageEngine, key []byt
 		Inclusive:  true,
 	}
 
-	cursor, err := m.Scan(txnID, target, opts)
+	cursor, err := m.Scan(txnID, tableName, indexName, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -137,9 +134,9 @@ func (m *MVCCManager) Read(txnID int64, target storage.IStorageEngine, key []byt
 	return nil, fmt.Errorf("key not found")
 }
 
-func (m *MVCCManager) Write(txnID int64, target storage.IStorageEngine, key []byte, value []byte) error {
+func (m *MVCCManager) Write(txnID txn.TransactionID, tableName, indexName string, key []byte, value []byte) error {
 	m.mu.RLock()
-	txn, ok := m.transactions[TransactionID(txnID)]
+	txn, ok := m.transactions[txnID]
 	m.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("transaction %d not found", txnID)
@@ -148,16 +145,39 @@ func (m *MVCCManager) Write(txnID int64, target storage.IStorageEngine, key []by
 	internalKey := m.encodeKey(key, uint64(txnID))
 	payload := append([]byte{OpInsert}, value...)
 
-	writeOp := write_handler.WriteOperation{
-		Key:   internalKey,
-		Value: payload,
+	if m.logManager != nil {
+		walRecord := log.WALRecord{
+			TxnID: txn.GetID(),
+			Type:  log.UPDATE,
+			After: payload,
+		}
+		if _, err := m.logManager.AppendLogRecord(walRecord); err != nil {
+			return fmt.Errorf("WAL write failed: %w", err)
+		}
 	}
-	return m.writeHandler.HandleWrite(txn, writeOp)
+
+	if err := m.tableManager.Write(schema.WriteOperation{
+		TableName: tableName,
+		Key:       internalKey,
+		Value:     payload,
+	}); err != nil {
+		return fmt.Errorf("table manager write failed: %w", err)
+	}
+
+	txn.RecordRecoveryOperation(tableName, log.PUT, internalKey, payload)
+	if m.logManager != nil {
+		m.logManager.AddTransactionOperation(txn.GetID(), tableName, log.PUT, internalKey, payload)
+		if intentLogger, ok := m.logManager.(log.ReplicationIntentLogger); ok {
+			intentLogger.LogReplicationIntent(txn.GetID(), tableName, log.PUT, internalKey, payload)
+		}
+	}
+
+	return nil
 }
 
-func (m *MVCCManager) Delete(txnID int64, target storage.IStorageEngine, key []byte) error {
+func (m *MVCCManager) Delete(txnID txn.TransactionID, tableName, indexName string, key []byte) error {
 	m.mu.RLock()
-	txn, ok := m.transactions[TransactionID(txnID)]
+	txn, ok := m.transactions[txnID]
 	m.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("transaction %d not found", txnID)
@@ -166,23 +186,51 @@ func (m *MVCCManager) Delete(txnID int64, target storage.IStorageEngine, key []b
 	internalKey := m.encodeKey(key, uint64(txnID))
 	payload := []byte{OpDelete}
 
-	writeOp := write_handler.WriteOperation{
-		Key:      internalKey,
-		Value:    payload,
-		IsDelete: true,
+	var beforeImage []byte
+	if existingVal, err := m.Read(txnID, tableName, indexName, key); err == nil {
+		beforeImage = existingVal
 	}
-	return m.writeHandler.HandleWrite(txn, writeOp)
+
+	if m.logManager != nil {
+		walRecord := log.WALRecord{
+			TxnID:  txn.GetID(),
+			Type:   log.UPDATE,
+			Before: beforeImage,
+			After:  payload,
+		}
+		if _, err := m.logManager.AppendLogRecord(walRecord); err != nil {
+			return fmt.Errorf("WAL write failed: %w", err)
+		}
+	}
+
+	if err := m.tableManager.Write(schema.WriteOperation{
+		TableName: tableName,
+		Key:       internalKey,
+		Value:     payload,
+	}); err != nil {
+		return fmt.Errorf("table manager delete write failed: %w", err)
+	}
+
+	txn.RecordRecoveryOperation(tableName, log.DELETE, internalKey, nil)
+	if m.logManager != nil {
+		m.logManager.AddTransactionOperation(txn.GetID(), tableName, log.DELETE, internalKey, nil)
+		if intentLogger, ok := m.logManager.(log.ReplicationIntentLogger); ok {
+			intentLogger.LogReplicationIntent(txn.GetID(), tableName, log.DELETE, internalKey, nil)
+		}
+	}
+
+	return nil
 }
 
-func (m *MVCCManager) Scan(txnID int64, target storage.IStorageEngine, opts storage.ScanOptions) (storage.ICursor, error) {
+func (m *MVCCManager) Scan(txnID txn.TransactionID, tableName, indexName string, opts storage.ScanOptions) (storage.ICursor, error) {
 	m.mu.RLock()
-	txn, ok := m.transactions[TransactionID(txnID)]
+	txn, ok := m.transactions[txnID]
 	m.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("transaction %d not found", txnID)
 	}
 
-	raw, err := target.Scan(opts)
+	raw, err := m.tableManager.Scan(tableName, indexName, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -195,70 +243,13 @@ func (m *MVCCManager) Scan(txnID int64, target storage.IStorageEngine, opts stor
 	}, nil
 }
 
-func (m *MVCCManager) compaction(target storage.IStorageEngine) error {
-	m.mu.RLock()
-	minActiveID := int64(math.MaxInt64)
-	for id := range m.transactions {
-		if int64(id) < minActiveID {
-			minActiveID = int64(id)
-		}
-	}
-	m.mu.RUnlock()
-
-	// If no transactions active, we can compact up to the current nextTxnID
-	if minActiveID == math.MaxInt64 {
-		minActiveID = m.nextTxnID.Load()
-	}
-
-	raw, err := target.Scan(storage.ScanOptions{})
-	if err != nil {
-		return err
-	}
-	defer raw.Close()
-
-	var lastUserKey string
-	var foundVisible bool
-
-	for raw.Next() {
-		entry := raw.Entry()
-		userKey, xmin := m.decodeKey(entry.Key)
-		uKeyStr := string(userKey)
-
-		if uKeyStr != lastUserKey {
-			lastUserKey = uKeyStr
-			foundVisible = false
-		}
-
-		// Keep if xmin >= minActiveID (still potentially needed for snapshots)
-		if int64(xmin) >= minActiveID {
-			continue
-		}
-
-		// If xmin < minActiveID and we already found a visible version for this key,
-		// this version is logically dead and can be purged.
-		if foundVisible {
-			target.Delete(entry.Key)
-			continue
-		}
-
-		// Mark first encountered version < minActiveID as the "base" version to keep
-		foundVisible = true
-
-		// If the base version is a delete, we can purge the tombstone itself
-		if entry.Value[0] == OpDelete {
-			target.Delete(entry.Key)
-		}
-	}
-	return nil
-}
-
-func (m *MVCCManager) isVisible(txn *txn_unit.Transaction, xmin uint64) bool {
+func (m *MVCCManager) isVisible(txn *txn_unit.Transaction, xmin txn.TransactionID) bool {
 	if xmin == txn.GetID() {
 		return true
 	}
 
 	m.mu.RLock()
-	committed := m.committedTxns[int64(xmin)]
+	committed := m.committedTxns[xmin]
 	m.mu.RUnlock()
 
 	switch txn.GetIsolationLevel() {

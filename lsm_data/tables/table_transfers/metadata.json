@@ -1,9 +1,0 @@
-{
-  "sstable_id": 2,
-  "sstables": [
-    {
-      "id": 1,
-      "level": 0
-    }
-  ]
-}
