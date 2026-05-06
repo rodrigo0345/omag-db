@@ -15,32 +15,39 @@ type MVCCCursor struct {
 }
 
 func (c *MVCCCursor) Next() bool {
-      for c.raw.Next() {
-            entry := c.raw.Entry()
-            userKey, xmin := c.manager.decodeKey(entry.Key)
+	for c.raw.Next() {
+		entry := c.raw.Entry()
+		userKey, xmin, ok := c.manager.decodeKey(entry.Key)
+		if !ok || !c.manager.isVisible(c.txn, txn.TransactionID(xmin)) {
+			continue
+		}
 
-            // 1. Is this version committed/visible to us?
-            if !c.manager.isVisible(c.txn, txn.TransactionID(xmin)) {
-                  continue
-            }
+		keyStr := string(userKey)
+		if c.seenKeys[keyStr] {
+			continue
+		}
 
-            // 2. Only return the newest visible version of a specific key
-            keyStr := string(userKey)
-            if c.seenKeys[keyStr] {
-                  continue
-            }
-            c.seenKeys[keyStr] = true
+		// Lock the key immediately
+		c.seenKeys[keyStr] = true
 
-            // 3. Check for Tombstone
-            if len(entry.Value) > 0 && entry.Value[0] == OpDelete {
-                  continue
-            }
+		if len(entry.Value) == 0 {
+			continue
+		}
 
-            // FIX: Must capture the current entry to be returned by Entry()
-            c.currentEntry = entry
-            return true
-      }
-      return false
+		// Identify operation byte
+		op := entry.Value[0]
+		if op == OpDelete {
+			// Key is marked as seen; loop continues but
+			// will skip all older versions of keyStr.
+			continue
+		}
+
+		c.currentEntry = entry
+		c.currentEntry.Value = entry.Value[1:] // Strip metadata
+		c.currentEntry.Key = userKey
+		return true
+	}
+	return false
 }
 
 func (c *MVCCCursor) Entry() storage.ScanEntry { return c.currentEntry }

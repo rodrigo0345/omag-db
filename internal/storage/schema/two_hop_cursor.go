@@ -1,6 +1,8 @@
 package schema
 
 import (
+	"fmt"
+
 	"github.com/rodrigo0345/omag/internal/storage"
 )
 
@@ -21,21 +23,33 @@ func (c *TwoHopCursor) Next() bool {
 		secEntry := c.secondaryCursor.Entry()
 		primaryKey := secEntry.Value
 
+		// Log the mapping found in the secondary index
+		fmt.Printf("TwoHop: [Secondary Key: %x] mapped to [Primary Key: %x]\n", secEntry.Key, primaryKey)
+
 		// Transparent Hop 2
 		primaryVal, err := c.primaryEngine.Get(primaryKey)
 		if err != nil {
 			c.err = err
+			fmt.Printf("TwoHop: Error fetching Primary Key %x: %v\n", primaryKey, err)
 			return false
 		}
 
-		// Skip "ghosts": secondary index entry exists but primary row was deleted
+		// Logic Check: primaryVal == nil usually means the key was not found.
+		// If your MVCC Delete returns an OpDelete byte, primaryVal will NOT be nil.
 		if primaryVal == nil {
+			fmt.Printf("TwoHop: Skipping ghost record (Primary Key %x not found)\n", primaryKey)
+			continue
+		}
+
+		// Check for MVCC Tombstones if primaryEngine returns them instead of nil
+		if len(primaryVal) > 0 && primaryVal[0] == 0x02 { // Assuming OpDelete is 0x02
+			fmt.Printf("TwoHop: Found Tombstone for Primary Key %x, skipping\n", primaryKey)
 			continue
 		}
 
 		c.currentEntry = storage.ScanEntry{
-			Key:   secEntry.Key, // The user's requested index key
-			Value: primaryVal,   // The resolved full row payload
+			Key:   secEntry.Key,
+			Value: primaryVal,
 		}
 		return true
 	}

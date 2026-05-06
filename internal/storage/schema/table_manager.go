@@ -177,6 +177,8 @@ func (tm *TableManager) Delete(op DeleteOperation) error {
 		return fmt.Errorf("table %s does not exist", tableName)
 	}
 
+	tableSchema.GetAllIndexes()
+
 	// 1. Purge Secondary Indexes
 	// Since secondary indexes are keyed by column values, we MUST have the previous data
 	// (BeforeImage) to find and delete the correct index entries.
@@ -339,13 +341,13 @@ func extractProjectedColumns(schemaCols []Column, value []byte, projection []str
 }
 
 func (tm *TableManager) DecodeRow(tableName string, columnName string, row []byte) Value {
-      tm.mu.RLock()
-      tableSchema, exists := tm.schemas[tableName]
-      tm.mu.RUnlock()
+	tm.mu.RLock()
+	tableSchema, exists := tm.schemas[tableName]
+	tm.mu.RUnlock()
 
-      if !exists {
-            return Value{err: fmt.Errorf("table %s does not exist", tableName)}
-      }
+	if !exists {
+		return Value{err: fmt.Errorf("table %s does not exist", tableName)}
+	}
 
-      return tableSchema.DecodeRow(columnName, row)
+	return tableSchema.DecodeRow(columnName, row)
 }

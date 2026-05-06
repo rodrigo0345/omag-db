@@ -70,6 +70,10 @@ func (t *Transaction) SetSnapshot(snapshotTxnIDs []int64) {
 	}
 }
 
+func (t *Transaction) GetSnapshot() map[int64]bool {
+	return t.snapshotActiveTxn
+}
+
 func (t *Transaction) IsVisibleInSnapshot(xmin int64) bool {
 	// Future transactions are invisible
 	if xmin > int64(t.txnID) {

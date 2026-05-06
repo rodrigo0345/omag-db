@@ -22,36 +22,51 @@ const (
 	TypeBool
 	TypeString
 )
+
 // Decoder signature for low-level byte parsing.
 type Decoder func(row []byte, offset int) (value any, size int, err error)
 
 // TypeDecoders is the registry of how to turn bytes into Go types.
 var TypeDecoders = map[DataType]Decoder{
 	TypeMetadata: func(row []byte, offset int) (any, int, error) {
-		if offset >= len(row) { return nil, 0, fmt.Errorf("EOF") }
+		if offset >= len(row) {
+			return nil, 0, fmt.Errorf("EOF")
+		}
 		return row[offset], 1, nil
 	},
 	TypeBool: func(row []byte, offset int) (any, int, error) {
-		if offset >= len(row) { return nil, 0, fmt.Errorf("EOF") }
+		if offset >= len(row) {
+			return nil, 0, fmt.Errorf("EOF")
+		}
 		return row[offset] != 0, 1, nil
 	},
 	TypeInt32: func(row []byte, offset int) (any, int, error) {
-		if offset+4 > len(row) { return nil, 0, fmt.Errorf("EOF") }
+		if offset+4 > len(row) {
+			return nil, 0, fmt.Errorf("EOF")
+		}
 		return int32(binary.BigEndian.Uint32(row[offset:])), 4, nil
 	},
 	TypeInt64: func(row []byte, offset int) (any, int, error) {
-		if offset+8 > len(row) { return nil, 0, fmt.Errorf("EOF") }
+		if offset+8 > len(row) {
+			return nil, 0, fmt.Errorf("EOF")
+		}
 		return int64(binary.BigEndian.Uint64(row[offset:])), 8, nil
 	},
 	TypeFloat64: func(row []byte, offset int) (any, int, error) {
-		if offset+8 > len(row) { return nil, 0, fmt.Errorf("EOF") }
+		if offset+8 > len(row) {
+			return nil, 0, fmt.Errorf("EOF")
+		}
 		bits := binary.BigEndian.Uint64(row[offset:])
 		return math.Float64frombits(bits), 8, nil
 	},
 	TypeString: func(row []byte, offset int) (any, int, error) {
-		if offset+4 > len(row) { return nil, 0, fmt.Errorf("truncated string header") }
+		if offset+4 > len(row) {
+			return nil, 0, fmt.Errorf("truncated string header")
+		}
 		strLen := int(binary.BigEndian.Uint32(row[offset : offset+4]))
-		if offset+4+strLen > len(row) { return nil, 0, fmt.Errorf("truncated string data") }
+		if offset+4+strLen > len(row) {
+			return nil, 0, fmt.Errorf("truncated string data")
+		}
 		return string(row[offset+4 : offset+4+strLen]), 4 + strLen, nil
 	},
 }
@@ -65,36 +80,50 @@ type Value struct {
 }
 
 func (v Value) Int() int64 {
-	if v.err != nil { return 0 }
+	if v.err != nil {
+		return 0
+	}
 	switch val := v.inner.(type) {
-	case int32: return int64(val)
-	case int64: return val
-	case byte:  return int64(val)
-	default:    return 0
+	case int32:
+		return int64(val)
+	case int64:
+		return val
+	case byte:
+		return int64(val)
+	default:
+		return 0
 	}
 }
 
 func (v Value) String() string {
-	if v.err != nil { return "" }
+	if v.err != nil {
+		return ""
+	}
 	s, _ := v.inner.(string)
 	return s
 }
 
 func (v Value) Float() float64 {
-	if v.err != nil { return 0.0 }
+	if v.err != nil {
+		return 0.0
+	}
 	f, _ := v.inner.(float64)
 	return f
 }
 
 func (v Value) Bool() bool {
-	if v.err != nil { return false }
+	if v.err != nil {
+		return false
+	}
 	b, _ := v.inner.(bool)
 	return b
 }
 
 // Datetime assumes the underlying data is a Unix Timestamp (Int64).
 func (v Value) Datetime() time.Time {
-	if v.err != nil { return time.Time{} }
+	if v.err != nil {
+		return time.Time{}
+	}
 	return time.Unix(v.Int(), 0)
 }
 
@@ -138,9 +167,20 @@ func (ts *TableSchema) DecodeRow(columnName string, row []byte) Value {
 		return Value{err: fmt.Errorf("cannot decode empty row")}
 	}
 
+	isMetadataMissing := ts.GetRowExpectedSize() - len(row)
+
 	offset := 0
 	for i := range ts.Columns {
 		col := &ts.Columns[i]
+
+		if i == 0 && isMetadataMissing == 1 { // this gentle forgiveness might introduce bugs
+			// Skip transactional metadata column
+			offset += 1
+			continue
+		}
+		if isMetadataMissing > 1 {
+			return Value{err: fmt.Errorf("row is missing %d bytes, cannot decode", isMetadataMissing)}
+		}
 
 		if col.Name == columnName {
 			decoder, ok := TypeDecoders[col.Type]
@@ -162,6 +202,23 @@ func (ts *TableSchema) DecodeRow(columnName string, row []byte) Value {
 	}
 
 	return Value{err: fmt.Errorf("column %q not found in schema", columnName)}
+}
+
+func (ts *TableSchema) GetRowExpectedSize() int {
+	size := 0
+	for col := range ts.Columns {
+		switch ts.Columns[col].Type {
+		case TypeMetadata, TypeBool:
+			size += 1
+		case TypeInt32:
+			size += 4
+		case TypeInt64, TypeFloat64:
+			size += 8
+		case TypeString:
+			size += 4 + int(ts.Columns[col].MaxLen) // 4 bytes for length prefix
+		}
+	}
+	return size
 }
 
 func (ts *TableSchema) calculateSize(t DataType, row []byte, offset int) (int, error) {
@@ -230,7 +287,9 @@ func (ts *TableSchema) ExtractIndexValues(row []byte) (map[string][]byte, error)
 func (ts *TableSchema) GetName() string { return ts.Name }
 
 func (ts *TableSchema) GetColumns() []Column {
-	if len(ts.Columns) <= 1 { return nil }
+	if len(ts.Columns) <= 1 {
+		return nil
+	}
 	return ts.Columns[1:]
 }
 

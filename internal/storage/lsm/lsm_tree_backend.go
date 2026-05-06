@@ -401,21 +401,21 @@ func (l *LSMTreeBackend) Delete(key []byte) error {
 }
 
 func (l *LSMTreeBackend) Scan(opts storage.ScanOptions) (storage.ICursor, error) {
-	// Initial Bound Validation
-	if len(opts.LowerBound) > 0 && len(opts.UpperBound) > 0 {
-		if bytes.Compare(opts.LowerBound, opts.UpperBound) > 0 {
-			return nil, fmt.Errorf("lower bound greater than upper bound")
-		}
-	}
+	h := &iterHeap{reverse: opts.Reverse}
 
-	// Gather Iterators (Thread-Safe collection)
+	// 1. Memtable Priority: Always highest (use a large constant)
 	l.memtableLock.RLock()
-	memtableIter := newSSTableIter(&SSTable{
+	memIter := newSSTableIter(&SSTable{
 		data:       l.memtable.data,
 		tombstones: l.memtable.tombstones,
-	}, 1)
+	}, 999)
 	l.memtableLock.RUnlock()
 
+	if memIter.seek(opts.LowerBound, opts.Reverse) {
+		heap.Push(h, memIter)
+	}
+
+	// 2. Level Priorities: Decreasing with age
 	l.levelsLock.RLock()
 	var allTables []*SSTable
 	for _, level := range l.levels {
@@ -423,33 +423,19 @@ func (l *LSMTreeBackend) Scan(opts storage.ScanOptions) (storage.ICursor, error)
 	}
 	l.levelsLock.RUnlock()
 
-	h := &iterHeap{}
-
-	if memtableIter.next() {
-		heap.Push(h, memtableIter)
-	}
-
 	for i, ss := range allTables {
-		it := newSSTableIter(ss, len(allTables)-i)
-		if it.next() {
-			// Optimization: Seek to lower bound early
-			if len(opts.LowerBound) > 0 {
-				for string(it.key()) < string(opts.LowerBound) {
-					if !it.next() {
-						break
-					}
-				}
-			}
-			if it.key() != "" {
-				heap.Push(h, it)
-			}
+		// Ensure priority is lower than Memtable (999) and unique per table
+		priority := 500 - i
+		it := newSSTableIter(ss, priority)
+
+		if it.seek(opts.LowerBound, opts.Reverse) {
+			heap.Push(h, it)
 		}
 	}
 
 	return &LSMCursor{
-		h:        h,
-		opts:     opts,
-		seenKeys: make(map[string]bool),
+		h:    h,
+		opts: opts,
 	}, nil
 }
 
