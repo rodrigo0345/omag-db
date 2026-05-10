@@ -3,7 +3,7 @@ package lsm
 import (
 	"math"
 
-	applog "github.com/rodrigo0345/omag/pkg/log"
+	applog "github.com/rodrigo0345/omag/pkg/pkglog"
 )
 
 type CompactionPolicy interface {

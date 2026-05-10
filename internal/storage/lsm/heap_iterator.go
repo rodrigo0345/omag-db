@@ -1,7 +1,5 @@
 package lsm
 
-import "bytes"
-
 type iterHeap struct {
 	iters   []*sstableIter
 	reverse bool // Controls heap direction
@@ -11,23 +9,14 @@ func (h *iterHeap) Len() int      { return len(h.iters) }
 func (h *iterHeap) Swap(i, j int) { h.iters[i], h.iters[j] = h.iters[j], h.iters[i] }
 
 func (h *iterHeap) Less(i, j int) bool {
-	// Ensure we are comparing bytes directly
-	ki, kj := h.iters[i].key(), h.iters[j].key()
-	cmp := bytes.Compare([]byte(ki), []byte(kj))
-
-	if h.reverse {
-		if cmp != 0 {
-			return cmp > 0 // Max-Heap for Reverse
-		}
-		// If keys/timestamps are identical, youngest component (highest priority) wins
+	if h.iters[i].priority != h.iters[j].priority {
 		return h.iters[i].priority > h.iters[j].priority
 	}
-
-	if cmp != 0 {
-		return cmp < 0 // Min-Heap for Forward
+	// If priorities are equal, compare keys to maintain sort order
+	if h.reverse {
+		return h.iters[i].key() > h.iters[j].key()
 	}
-	// Youngest component wins tie-break
-	return h.iters[i].priority > h.iters[j].priority
+	return h.iters[i].key() < h.iters[j].key()
 }
 
 func (h *iterHeap) Push(x any) {

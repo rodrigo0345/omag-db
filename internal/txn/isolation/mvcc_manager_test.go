@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,46 +18,54 @@ import (
 	"github.com/rodrigo0345/omag/internal/txn/log"
 	"github.com/rodrigo0345/omag/internal/txn/rollback"
 	"github.com/rodrigo0345/omag/internal/txn/txn_unit"
+	"github.com/rodrigo0345/omag/pkg/pkglog"
 )
 
 // --- Test Environment Setup ---
 
-func setupMVCCWithRealTableManager() (*MVCCManager, *schema.TableManager) {
+func setupMVCCWithRealTableManager(t *testing.T) (*MVCCManager, *schema.TableManager) {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "wal.log")
+	diskPath := filepath.Join(tempDir, "data.db")
+	lsmPath := filepath.Join(tempDir, "lsm_data")
+
 	tm := schema.NewTableManager()
+
+	logMgr, err := log.NewWALManager(walPath)
+	if err != nil {
+		t.Fatalf("failed to create WAL: %v", err)
+	}
+
+	diskManager, err := buffer.NewDiskManager(diskPath)
+	if err != nil {
+		t.Fatalf("failed to create DiskMgr: %v", err)
+	}
+
+	bufferMgr := buffer.NewBufferPoolManager(50, diskManager)
+	storageEngine := lsm.NewLSMTreeBackendWithDataDir(logMgr, bufferMgr, lsmPath)
+
+	rollbackMgr := rollback.NewRollbackManager(bufferMgr)
 
 	cols := []schema.Column{
 		{Name: "id", Type: schema.TypeInt32},
 		{Name: "val", Type: schema.TypeInt32},
 	}
-
-	// check if the tmp files exist and remove them
-	walPath := "/tmp/wal.db"
-	diskPath := "/tmp/disk_manager"
-
-	// Remove existing files
-	if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
-	}
-
-	if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
-	}
-
-	logMgr, err := log.NewWALManager("/tmp/wal.db")
-	if err != nil {
-		panic(err)
-	}
-	diskManager, err := buffer.NewDiskManager("/tmp/disk_manager")
-	if err != nil {
-		panic(err)
-	}
-	bufferMgr := buffer.NewBufferPoolManager(10, diskManager)
-	storage := lsm.NewLSMTreeBackend(logMgr, bufferMgr)
-	rollback := rollback.NewRollbackManager(bufferMgr)
 	ts := schema.NewTableSchema("test_table", cols)
-	ts.AddIndex("PRIMARY", []string{"id"}, storage)
+	ts.AddIndex("PRIMARY", []string{"id"}, storageEngine)
 	tm.CreateTable(ts, true)
 
-	// Note: Ensure your MVCCManager has access to the TableManager internally
-	mvcc := NewMVCCManager(logMgr, bufferMgr, rollback, tm)
+	tracer := pkglog.NewTracer()
+
+	mvcc := NewMVCCManager(logMgr, bufferMgr, rollbackMgr, tm, tracer)
+
+	t.Cleanup(func() {
+		storageEngine.Close()
+		logMgr.Close()
+		diskManager.Close()
+	})
+
 	return mvcc, tm
 }
 
@@ -76,7 +84,7 @@ func getValFromTable(tm *schema.TableManager, payload []byte) int32 {
 }
 
 func TestMVCC_ReadCommitted_Visibility(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("k1")
 
 	t1 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
@@ -108,7 +116,7 @@ func TestMVCC_ReadCommitted_Visibility(t *testing.T) {
 }
 
 func TestMVCC_RepeatableRead_Snapshot(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("k1")
 
 	// T0 initializes data
@@ -137,7 +145,7 @@ func TestMVCC_RepeatableRead_Snapshot(t *testing.T) {
 }
 
 func TestMVCC_Delete_Isolation(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	key := []byte("k1")
 
 	t1 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
@@ -165,7 +173,7 @@ func TestMVCC_Delete_Isolation(t *testing.T) {
 }
 
 func TestMVCC_MultipleVersions_Scanning(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("k1")
 
 	// Write 3 versions
@@ -189,7 +197,7 @@ func TestMVCC_MultipleVersions_Scanning(t *testing.T) {
 }
 
 func TestMVCC_HighConcurrency_LostUpdate(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("counter")
 
 	// Initialize counter at 0
@@ -229,7 +237,7 @@ func TestMVCC_HighConcurrency_LostUpdate(t *testing.T) {
 }
 
 func TestMVCC_LongRunningSnapshot_Integrity(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("stable_key")
 
 	// 1. Setup initial state
@@ -260,7 +268,7 @@ func TestMVCC_LongRunningSnapshot_Integrity(t *testing.T) {
 }
 
 func TestMVCC_MassParallelInserts_RangeScan(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	const totalKeys = 1000
 
 	// 1. Insert 1000 keys
@@ -291,7 +299,7 @@ func TestMVCC_MassParallelInserts_RangeScan(t *testing.T) {
 }
 
 func TestMVCC_Abort_WritesNotVisible(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	key := []byte("k_abort")
 
 	t1 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
@@ -306,7 +314,7 @@ func TestMVCC_Abort_WritesNotVisible(t *testing.T) {
 }
 
 func TestMVCC_Abort_DoesNotAffectPreviousCommit(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("k_stable")
 
 	// Commit initial value
@@ -331,7 +339,7 @@ func TestMVCC_Abort_DoesNotAffectPreviousCommit(t *testing.T) {
 }
 
 func TestMVCC_Abort_AfterMultipleWrites(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 
 	// Commit a baseline for several keys
 	for i := 1; i <= 5; i++ {
@@ -366,7 +374,7 @@ func TestMVCC_Abort_AfterMultipleWrites(t *testing.T) {
 }
 
 func TestMVCC_Abort_DeleteIsReverted(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("del_revert")
 
 	t1 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
@@ -389,7 +397,7 @@ func TestMVCC_Abort_DeleteIsReverted(t *testing.T) {
 }
 
 func TestMVCC_Abort_TransactionCannotBeReused(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	key := []byte("reuse_key")
 
 	t1 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
@@ -411,7 +419,7 @@ func TestMVCC_Abort_TransactionCannotBeReused(t *testing.T) {
 
 // helper to avoid re-declaring tm when we just need it for decode
 func setupMVCCWithRealTableManagerTM(t *testing.T) *schema.TableManager {
-	_, tm := setupMVCCWithRealTableManager()
+	_, tm := setupMVCCWithRealTableManager(t)
 	return tm
 }
 
@@ -420,7 +428,7 @@ func setupMVCCWithRealTableManagerTM(t *testing.T) *schema.TableManager {
 // =============================================================================
 
 func TestMVCC_CommitFails_WriteWriteConflict(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	key := []byte("conflict_key")
 
 	// T1 and T2 both write to the same key concurrently (serializable)
@@ -444,7 +452,7 @@ func TestMVCC_CommitFails_WriteWriteConflict(t *testing.T) {
 }
 
 func TestMVCC_CommitFails_StaleRead_SerializableConflict(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	key := []byte("serial_key")
 
 	// Establish initial value
@@ -469,7 +477,7 @@ func TestMVCC_CommitFails_StaleRead_SerializableConflict(t *testing.T) {
 }
 
 func TestMVCC_CommitFails_AfterAbort(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	key := []byte("abort_commit")
 
 	t1 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
@@ -484,7 +492,7 @@ func TestMVCC_CommitFails_AfterAbort(t *testing.T) {
 }
 
 func TestMVCC_CommitFails_DoubleCommit(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	key := []byte("double_commit")
 
 	t1 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
@@ -513,7 +521,7 @@ func TestMVCC_DirtyRead_Prevention_AllLevels(t *testing.T) {
 
 	for _, level := range levels {
 		t.Run(string(level), func(t *testing.T) {
-			mvcc, _ := setupMVCCWithRealTableManager()
+			mvcc, _ := setupMVCCWithRealTableManager(t)
 			key := []byte("dirty_read_key")
 
 			tWriter := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
@@ -530,7 +538,7 @@ func TestMVCC_DirtyRead_Prevention_AllLevels(t *testing.T) {
 }
 
 func TestMVCC_PhantomRead_Detection_RepeatableRead(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 
 	// T1 starts a Repeatable Read snapshot
 	t1 := mvcc.BeginTransaction(txn_unit.REPEATABLE_READ)
@@ -560,7 +568,7 @@ func TestMVCC_PhantomRead_Detection_RepeatableRead(t *testing.T) {
 }
 
 func TestMVCC_NonRepeatableRead_Allowed_ReadCommitted(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("nr_key")
 
 	// Commit initial value
@@ -597,7 +605,7 @@ func TestMVCC_NonRepeatableRead_Allowed_ReadCommitted(t *testing.T) {
 }
 
 func TestMVCC_RepeatableRead_SameValue_MultipleReads(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("rr_stable")
 
 	t0 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
@@ -627,7 +635,7 @@ func TestMVCC_RepeatableRead_SameValue_MultipleReads(t *testing.T) {
 // =============================================================================
 
 func TestMVCC_ConcurrentAborts_DataIntegrity(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("concurrent_abort")
 
 	// Establish baseline
@@ -665,7 +673,7 @@ func TestMVCC_ConcurrentAborts_DataIntegrity(t *testing.T) {
 }
 
 func TestMVCC_RaceAbortCommit_SameTransaction(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	key := []byte("race_key")
 
 	// This tests that abort and commit on the same txn don't corrupt state
@@ -688,7 +696,7 @@ func TestMVCC_RaceAbortCommit_SameTransaction(t *testing.T) {
 // =============================================================================
 
 func TestMVCC_VersionChain_AbortedVersionsSkipped(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("chain_key")
 
 	// v1 = committed (val=5)
@@ -722,7 +730,7 @@ func TestMVCC_VersionChain_AbortedVersionsSkipped(t *testing.T) {
 }
 
 func TestMVCC_VersionChain_SnapshotSeesOnlyCommittedBeforeSnapshot(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("snap_chain")
 
 	// v1 committed before snapshot
@@ -757,7 +765,7 @@ func TestMVCC_VersionChain_SnapshotSeesOnlyCommittedBeforeSnapshot(t *testing.T)
 // =============================================================================
 
 func TestMVCC_ReadYourOwnWrites(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("ryw_key")
 
 	t1 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
@@ -774,7 +782,7 @@ func TestMVCC_ReadYourOwnWrites(t *testing.T) {
 }
 
 func TestMVCC_ReadYourOwnDelete(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	key := []byte("ryd_key")
 
 	// First commit a row
@@ -784,15 +792,19 @@ func TestMVCC_ReadYourOwnDelete(t *testing.T) {
 
 	// T2 deletes, then tries to read — should get nothing
 	t2 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
-	mvcc.Delete(txn.TransactionID(t2), "test_table", "PRIMARY", key)
+	err := mvcc.Delete(txn.TransactionID(t2), "test_table", "PRIMARY", key)
+	if err != nil {
+		fmt.Printf("Error deleting key: %s, %s", string(key), err.Error())
+	}
 	res, err := mvcc.Read(txn.TransactionID(t2), "test_table", "PRIMARY", key)
 	if err == nil && res != nil {
+		mvcc.tracer.PrintTrace()
 		t.Error("ReadYourOwnDelete: deleted row still visible within same transaction")
 	}
 }
 
 func TestMVCC_ReadYourOwnWrite_OverwrittenMultipleTimes(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 	key := []byte("ryw_multi")
 
 	t1 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
@@ -813,7 +825,7 @@ func TestMVCC_ReadYourOwnWrite_OverwrittenMultipleTimes(t *testing.T) {
 // =============================================================================
 
 func TestMVCC_Scan_ExcludesAbortedInserts(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 
 	// Commit 5 rows
 	for i := 0; i < 5; i++ {
@@ -847,7 +859,7 @@ func TestMVCC_Scan_ExcludesAbortedInserts(t *testing.T) {
 }
 
 func TestMVCC_Scan_IncludesOwnUncommittedWrites(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 
 	t1 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
 	for i := 0; i < 3; i++ {
@@ -875,7 +887,7 @@ func TestMVCC_Scan_IncludesOwnUncommittedWrites(t *testing.T) {
 // =============================================================================
 
 func TestMVCC_ManyTransactions_StressIDAllocation(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 
 	const n = 500
 	ids := make([]txn.TransactionID, n)
@@ -899,7 +911,7 @@ func TestMVCC_ManyTransactions_StressIDAllocation(t *testing.T) {
 }
 
 func TestMVCC_EmptyRead_BeforeAnyWrite(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	key := []byte("never_written")
 
 	t1 := mvcc.BeginTransaction(txn_unit.READ_COMMITTED)
@@ -910,7 +922,7 @@ func TestMVCC_EmptyRead_BeforeAnyWrite(t *testing.T) {
 }
 
 func TestMVCC_WriteEmptyPayload_DoesNotPanic(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	key := []byte("empty_payload")
 
 	defer func() {
@@ -930,7 +942,7 @@ func TestMVCC_WriteEmptyPayload_DoesNotPanic(t *testing.T) {
 // =============================================================================
 
 func TestMVCC_Operations_CompleteWithinTimeout(t *testing.T) {
-	mvcc, _ := setupMVCCWithRealTableManager()
+	mvcc, _ := setupMVCCWithRealTableManager(t)
 	key := []byte("timeout_key")
 
 	done := make(chan struct{})
@@ -955,7 +967,7 @@ func TestMVCC_Operations_CompleteWithinTimeout(t *testing.T) {
 // =============================================================================
 
 func TestMVCC_CrossTable_TransactionIsolation(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 
 	// Use only the one table available, but simulate two logical "domains"
 	keyA := []byte("table_a_row")
@@ -979,7 +991,7 @@ func TestMVCC_CrossTable_TransactionIsolation(t *testing.T) {
 }
 
 func TestMVCC_AtomicCommit_AllOrNothing(t *testing.T) {
-	mvcc, tm := setupMVCCWithRealTableManager()
+	mvcc, tm := setupMVCCWithRealTableManager(t)
 
 	keyA := []byte("atomic_a")
 	keyB := []byte("atomic_b")

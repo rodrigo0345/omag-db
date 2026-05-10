@@ -15,7 +15,7 @@ import (
 	"github.com/rodrigo0345/omag/internal/storage"
 	"github.com/rodrigo0345/omag/internal/storage/buffer"
 	"github.com/rodrigo0345/omag/internal/txn/log"
-	applog "github.com/rodrigo0345/omag/pkg/log"
+	applog "github.com/rodrigo0345/omag/pkg/pkglog"
 )
 
 const SSTableMaxSize = 65536
@@ -434,8 +434,9 @@ func (l *LSMTreeBackend) Scan(opts storage.ScanOptions) (storage.ICursor, error)
 	}
 
 	return &LSMCursor{
-		h:    h,
-		opts: opts,
+		h:        h,
+		opts:     opts,
+		seenKeys: make(map[string]bool),
 	}, nil
 }
 

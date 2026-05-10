@@ -14,6 +14,7 @@ import (
 	"github.com/rodrigo0345/omag/internal/txn/log"
 	"github.com/rodrigo0345/omag/internal/txn/rollback"
 	"github.com/rodrigo0345/omag/internal/txn/txn_unit"
+	"github.com/rodrigo0345/omag/pkg/pkglog"
 )
 
 const (
@@ -65,17 +66,20 @@ type MVCCManager struct {
 	logManager      log.ILogManager
 	bufferManager   buffer.IBufferPoolManager
 	rollbackManager *rollback.RollbackManager
+	tracer          *pkglog.Tracer // Updated: Ensure this matches your Tracer struct
 	tableManager    schema.ITableManager
 
 	nextTxnID      atomic.Int64
 	minActiveTxnID atomic.Int64
 }
 
+// Updated constructor to accept the tracer
 func NewMVCCManager(
 	logMgr log.ILogManager,
 	bufferMgr buffer.IBufferPoolManager,
 	rollbackMgr *rollback.RollbackManager,
 	tableManager schema.ITableManager,
+	tracer *pkglog.Tracer,
 ) *MVCCManager {
 	m := &MVCCManager{
 		transactions:    make(map[txn.TransactionID]*txnMeta),
@@ -83,6 +87,7 @@ func NewMVCCManager(
 		bufferManager:   bufferMgr,
 		rollbackManager: rollbackMgr,
 		tableManager:    tableManager,
+		tracer:          tracer,
 	}
 	m.minActiveTxnID.Store(math.MaxInt64)
 	return m
@@ -97,6 +102,11 @@ func (m *MVCCManager) BeginTransaction(isolationLevel uint8) int64 {
 	defer m.mu.Unlock()
 
 	id := m.nextTxnID.Add(1)
+
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("BeginTransaction: Starting TxnID %d with isolation level %d", id, isolationLevel))
+	}
+
 	t := txn_unit.NewTransaction(uint64(id), isolationLevel)
 
 	// Snapshot: capture only the IDs of transactions that are still active.
@@ -111,6 +121,10 @@ func (m *MVCCManager) BeginTransaction(isolationLevel uint8) int64 {
 	}
 	t.SetSnapshot(activeIDs) // store which txns were active at the time of this txn's start for visibility checks
 
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("BeginTransaction: TxnID %d captured snapshot of active txns: %v", id, activeIDs))
+	}
+
 	m.transactions[txn.TransactionID(id)] = &txnMeta{
 		txn:             t,
 		status:          statusActive,
@@ -120,43 +134,38 @@ func (m *MVCCManager) BeginTransaction(isolationLevel uint8) int64 {
 	return id
 }
 
-// Commit validates the transaction's write set against concurrent committed
-// writers and, if no conflict is found, marks it committed. If a conflict is
-// found the transaction is automatically aborted and an error is returned.
-//
-// Conflict rule (first-writer-wins / snapshot isolation):
-//
-//	For every user key this transaction wrote, if any other transaction with a
-//	strictly higher ID than ours has already committed a write to that same
-//	key, we lose — our view of the key was stale when we started writing.
-//
-// Why higher ID = later writer?
-//
-//	Transaction IDs are allocated monotonically at BeginTransaction. A higher
-//	ID means the transaction started after ours. If such a transaction already
-//	committed a write to a key we also wrote, it got there first (it
-//	committed while we were still running). Allowing both commits would
-//	silently discard the other writer's update — a lost update anomaly.
 func (m *MVCCManager) Commit(txnID txn.TransactionID) error {
 	m.mu.Lock()
+
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Commit: Attempting to commit TxnID %d", txnID))
+	}
 
 	meta, ok := m.transactions[txnID]
 	if !ok {
 		m.mu.Unlock()
+		if m.tracer != nil {
+			m.tracer.Add(fmt.Sprintf("Commit: Failed - TxnID %d not found", txnID))
+		}
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
 	if meta.status != statusActive {
 		m.mu.Unlock()
+		if m.tracer != nil {
+			m.tracer.Add(fmt.Sprintf("Commit: Failed - TxnID %d is already %s", txnID, meta.status))
+		}
 		return fmt.Errorf("transaction %d is already %s", txnID, meta.status)
 	}
 
 	// --- Conflict detection (under the write lock) ---
-	//
-	// Must hold the lock during detection so that no concurrent Commit can
-	// sneak in between the check and our own status flip. Without the lock,
-	// two conflicting transactions could both pass the check simultaneously
-	// and both commit — defeating the purpose.
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Commit: Running conflict detection for TxnID %d", txnID))
+	}
+
 	if conflictID := m.detectWriteConflict(txnID, meta); conflictID != 0 {
+		if m.tracer != nil {
+			m.tracer.Add(fmt.Sprintf("Commit: Decision - Conflict detected with TxnID %d, aborting TxnID %d", conflictID, txnID))
+		}
 		// Abort atomically while still holding the lock.
 		meta.status = statusAborted
 		m.updateMinActive()
@@ -170,9 +179,11 @@ func (m *MVCCManager) Commit(txnID txn.TransactionID) error {
 		)
 	}
 
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Commit: Decision - No conflicts found. Committing TxnID %d", txnID))
+	}
+
 	// No conflict — flip to committed atomically before releasing the lock.
-	// This closes the TOCTOU window: a reader cannot observe this txn as
-	// committed before the status is fully set.
 	meta.status = statusCommitted
 	m.updateMinActive()
 	m.mu.Unlock()
@@ -180,6 +191,9 @@ func (m *MVCCManager) Commit(txnID txn.TransactionID) error {
 	meta.txn.Commit()
 
 	if m.logManager != nil {
+		if m.tracer != nil {
+			m.tracer.Add(fmt.Sprintf("Commit: Flushing WAL for TxnID %d", txnID))
+		}
 		rec := log.WALRecord{TxnID: meta.txn.GetID(), Type: log.COMMIT}
 		lsn, _ := m.logManager.AppendLogRecord(rec)
 		m.logManager.Flush(lsn)
@@ -188,13 +202,11 @@ func (m *MVCCManager) Commit(txnID txn.TransactionID) error {
 	return nil
 }
 
-// detectWriteConflict checks whether any committed transaction with an ID
-// strictly greater than txnID has written to any of the same user keys.
-// Returns the conflicting transaction's ID, or 0 if there is no conflict.
-//
-// Must be called with m.mu held (write lock).
 func (m *MVCCManager) detectWriteConflict(txnID txn.TransactionID, meta *txnMeta) txn.TransactionID {
 	if len(meta.writtenUserKeys) == 0 {
+		if m.tracer != nil {
+			m.tracer.Add(fmt.Sprintf("detectWriteConflict: TxnID %d has no written keys, skipping detection", txnID))
+		}
 		return 0
 	}
 
@@ -220,8 +232,14 @@ func (m *MVCCManager) detectWriteConflict(txnID txn.TransactionID, meta *txnMeta
 		isLaterTxn := int64(otherID) > int64(txnID)
 
 		if wasActive || isLaterTxn {
+			if m.tracer != nil {
+				m.tracer.Add(fmt.Sprintf("detectWriteConflict: Comparing against committed TxnID %d (wasActiveAtStart: %v, isLaterTxn: %v)", otherID, wasActive, isLaterTxn))
+			}
 			for key := range meta.writtenUserKeys {
 				if _, exists := otherMeta.writtenUserKeys[key]; exists {
+					if m.tracer != nil {
+						m.tracer.Add(fmt.Sprintf("detectWriteConflict: Conflict! Both txns modified key '%s'", key))
+					}
 					return otherID
 				}
 			}
@@ -232,13 +250,23 @@ func (m *MVCCManager) detectWriteConflict(txnID txn.TransactionID, meta *txnMeta
 
 func (m *MVCCManager) Abort(txnID txn.TransactionID) error {
 	m.mu.Lock()
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Abort: Attempting to abort TxnID %d", txnID))
+	}
+
 	meta, ok := m.transactions[txnID]
 	if !ok {
 		m.mu.Unlock()
+		if m.tracer != nil {
+			m.tracer.Add(fmt.Sprintf("Abort: Failed - TxnID %d not found", txnID))
+		}
 		return fmt.Errorf("transaction %d not found", txnID)
 	}
 	if meta.status != statusActive {
 		m.mu.Unlock()
+		if m.tracer != nil {
+			m.tracer.Add(fmt.Sprintf("Abort: Failed - TxnID %d is already %s", txnID, meta.status))
+		}
 		return fmt.Errorf("transaction %d is already %s", txnID, meta.status)
 	}
 
@@ -246,12 +274,13 @@ func (m *MVCCManager) Abort(txnID txn.TransactionID) error {
 	m.updateMinActive()
 	m.mu.Unlock()
 
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Abort: Triggering physical rollback for TxnID %d", txnID))
+	}
 	m.physicalRollback(meta)
 	return nil
 }
 
-// physicalRollback removes WAL entries and undoes storage writes for an
-// aborted transaction. Safe to call without holding m.mu.
 func (m *MVCCManager) physicalRollback(meta *txnMeta) {
 	if m.logManager != nil {
 		m.logManager.CleanupTransactionOperations(meta.txn.GetID())
@@ -259,26 +288,45 @@ func (m *MVCCManager) physicalRollback(meta *txnMeta) {
 	m.rollbackManager.RollbackTransaction(meta.txn, nil, nil)
 }
 
+// Read now forwards strictly to Scan to prevent duplicate bound encoding.
 func (m *MVCCManager) Read(txnID txn.TransactionID, tableName, indexName string, key []byte) ([]byte, error) {
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Read: TxnID %d reading key '%s' from %s.%s", txnID, key, tableName, indexName))
+	}
+
 	opts := storage.ScanOptions{
-		LowerBound: m.encodeKey(key, math.MaxUint64),
-		UpperBound: m.encodeKey(key, 0),
+		LowerBound: key,
+		UpperBound: key,
 		Inclusive:  true,
 	}
 
 	cursor, err := m.Scan(txnID, tableName, indexName, opts)
 	if err != nil {
+		if m.tracer != nil {
+			m.tracer.Add(fmt.Sprintf("Read: Scan setup failed for TxnID %d: %v", txnID, err))
+		}
 		return nil, err
 	}
 	defer cursor.Close()
 
 	if cursor.Next() {
+		if m.tracer != nil {
+			m.tracer.Add(fmt.Sprintf("Read: Decision - Key '%s' found for TxnID %d", key, txnID))
+		}
 		return cursor.Entry().Value, nil
+	}
+
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Read: Decision - Key '%s' not found for TxnID %d", key, txnID))
 	}
 	return nil, fmt.Errorf("key not found")
 }
 
 func (m *MVCCManager) Write(txnID txn.TransactionID, tableName, indexName string, key []byte, value []byte) error {
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Write: TxnID %d attempting to write key '%s' to %s.%s", txnID, key, tableName, indexName))
+	}
+
 	m.mu.RLock()
 	meta, ok := m.transactions[txnID]
 	m.mu.RUnlock()
@@ -290,6 +338,9 @@ func (m *MVCCManager) Write(txnID txn.TransactionID, tableName, indexName string
 	payload := append([]byte{OpInsert}, value...)
 
 	if m.logManager != nil {
+		if m.tracer != nil {
+			m.tracer.Add(fmt.Sprintf("Write: TxnID %d logging to WAL", txnID))
+		}
 		rec := log.WALRecord{TxnID: meta.txn.GetID(), Type: log.UPDATE, After: payload}
 		if _, err := m.logManager.AppendLogRecord(rec); err != nil {
 			return fmt.Errorf("WAL write failed: %w", err)
@@ -304,9 +355,9 @@ func (m *MVCCManager) Write(txnID txn.TransactionID, tableName, indexName string
 		return fmt.Errorf("table manager write failed: %w", err)
 	}
 
-	// Track the user-space key (not the internal versioned key) so that
-	// conflict detection at commit time can compare write sets across txns.
+	m.mu.Lock()
 	meta.writtenUserKeys[string(key)] = struct{}{}
+	m.mu.Unlock()
 
 	meta.txn.RecordRecoveryOperation(tableName, log.PUT, internalKey, payload)
 	if m.logManager != nil {
@@ -315,10 +366,18 @@ func (m *MVCCManager) Write(txnID txn.TransactionID, tableName, indexName string
 			il.LogReplicationIntent(meta.txn.GetID(), tableName, log.PUT, internalKey, payload)
 		}
 	}
+
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Write: Decision - TxnID %d successfully wrote key '%s'", txnID, key))
+	}
 	return nil
 }
 
 func (m *MVCCManager) Delete(txnID txn.TransactionID, tableName, indexName string, key []byte) error {
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Delete: TxnID %d attempting to delete key '%s' from %s.%s", txnID, key, tableName, indexName))
+	}
+
 	m.mu.RLock()
 	meta, ok := m.transactions[txnID]
 	m.mu.RUnlock()
@@ -349,8 +408,9 @@ func (m *MVCCManager) Delete(txnID txn.TransactionID, tableName, indexName strin
 		return fmt.Errorf("table manager delete write failed: %w", err)
 	}
 
-	// A delete is a write — track it for conflict detection.
+	m.mu.Lock()
 	meta.writtenUserKeys[string(key)] = struct{}{}
+	m.mu.Unlock()
 
 	meta.txn.RecordRecoveryOperation(tableName, log.DELETE, internalKey, nil)
 	if m.logManager != nil {
@@ -359,10 +419,20 @@ func (m *MVCCManager) Delete(txnID txn.TransactionID, tableName, indexName strin
 			il.LogReplicationIntent(meta.txn.GetID(), tableName, log.DELETE, internalKey, nil)
 		}
 	}
+
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Delete: Decision - TxnID %d successfully recorded delete tombstone for key '%s'", txnID, key))
+	}
 	return nil
 }
 
+// Scan inflates the boundaries so the underlying physical storage engine
+// (LSM) can find the keys with their version suffixes attached.
 func (m *MVCCManager) Scan(txnID txn.TransactionID, tableName, indexName string, opts storage.ScanOptions) (storage.ICursor, error) {
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Scan: Setup beginning for TxnID %d on %s.%s", txnID, tableName, indexName))
+	}
+
 	m.mu.RLock()
 	meta, ok := m.transactions[txnID]
 	m.mu.RUnlock()
@@ -370,16 +440,42 @@ func (m *MVCCManager) Scan(txnID txn.TransactionID, tableName, indexName string,
 		return nil, fmt.Errorf("transaction %d not found", txnID)
 	}
 
-	raw, err := m.tableManager.Scan(tableName, indexName, opts)
+	// 1. Convert logical bounds to physical bounds
+	physicalOpts := opts
+	if len(opts.LowerBound) > 0 {
+		// Minimum possible version of LowerBound
+		physicalOpts.LowerBound = m.encodeKey(opts.LowerBound, math.MaxUint64)
+	}
+	if len(opts.UpperBound) > 0 {
+		// Maximum possible version of UpperBound
+		physicalOpts.UpperBound = m.encodeKey(opts.UpperBound, 0)
+	}
+
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Scan: Converted bounds -> Lower: %x, Upper: %x", physicalOpts.LowerBound, physicalOpts.UpperBound))
+	}
+
+	// 2. Clear Limit and Offset from physical query.
+	// We MUST apply limits/offsets AFTER visibility filtering in MVCCCursor!
+	physicalOpts.Limit = 0
+	physicalOpts.Offset = 0
+
+	raw, err := m.tableManager.Scan(tableName, indexName, physicalOpts)
 	if err != nil {
 		return nil, err
+	}
+
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("Scan: Creating MVCCCursor and injecting tracer for TxnID %d", txnID))
 	}
 
 	return &MVCCCursor{
 		raw:      raw,
 		manager:  m,
+		opts:     opts, // Keep original limits and bounds
 		txn:      meta.txn,
 		seenKeys: make(map[string]bool),
+		tracer:   m.tracer, // INJECTING TRACER HERE
 	}, nil
 }
 
@@ -387,20 +483,15 @@ func (m *MVCCManager) Scan(txnID txn.TransactionID, tableName, indexName string,
 // Visibility
 // ---------------------------------------------------------------------------
 
-// isVisible answers: can transaction t see the version written by xmin?
-//
-//  1. Own write: always visible.
-//  2. READ_COMMITTED: visible iff the writer has committed (re-evaluated per
-//     read — no snapshot pinning).
-//  3. REPEATABLE_READ / SERIALIZABLE: visible iff the writer committed AND
-//     was NOT in the active set at snapshot time (i.e. had already committed
-//     before this transaction began).
-//
-// Note on IsVisibleInSnapshot: must return true when xmin was NOT in the
-// active-at-begin set — meaning it had already committed before our snapshot.
-// If xmin WAS in the active set (in-flight at our begin) it must return false.
 func (m *MVCCManager) isVisible(t *txn_unit.Transaction, xmin txn.TransactionID) bool {
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("isVisible: Checking if TxnID %d can see row written by TxnID %d", t.GetID(), xmin))
+	}
+
 	if xmin == t.GetID() {
+		if m.tracer != nil {
+			m.tracer.Add("isVisible: Decision - True (Transaction observing its own write)")
+		}
 		return true
 	}
 
@@ -408,9 +499,10 @@ func (m *MVCCManager) isVisible(t *txn_unit.Transaction, xmin txn.TransactionID)
 	xminMeta, exists := m.transactions[xmin]
 	m.mu.RUnlock()
 
-	// Entry was GC'd — only evicted after all live snapshots have advanced
-	// past it, so treat as committed long ago.
 	if !exists {
+		if m.tracer != nil {
+			m.tracer.Add("isVisible: Decision - True (Writer transaction is GC'd, meaning it's old and committed)")
+		}
 		return true
 	}
 
@@ -418,13 +510,23 @@ func (m *MVCCManager) isVisible(t *txn_unit.Transaction, xmin txn.TransactionID)
 
 	switch t.GetIsolationLevel() {
 	case txn_unit.READ_COMMITTED:
+		if m.tracer != nil {
+			m.tracer.Add(fmt.Sprintf("isVisible: Decision - READ_COMMITTED rules -> Returning %v", committed))
+		}
 		return committed
 
 	case txn_unit.REPEATABLE_READ, txn_unit.SERIALIZABLE:
 		if !committed {
+			if m.tracer != nil {
+				m.tracer.Add("isVisible: Decision - False (REPEATABLE_READ/SERIALIZABLE: writer not committed)")
+			}
 			return false
 		}
-		return t.IsVisibleInSnapshot(int64(xmin))
+		visible := t.IsVisibleInSnapshot(int64(xmin))
+		if m.tracer != nil {
+			m.tracer.Add(fmt.Sprintf("isVisible: Decision - REPEATABLE_READ/SERIALIZABLE snapshot check -> %v", visible))
+		}
+		return visible
 
 	default:
 		return committed
@@ -438,17 +540,33 @@ func (m *MVCCManager) isVisible(t *txn_unit.Transaction, xmin txn.TransactionID)
 func (m *MVCCManager) GC() {
 	m.mu.Lock()
 	lowWater := m.computeMinActive()
+
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("GC: Started cleanup. Low water mark TxnID calculated as %d", lowWater))
+	}
+
+	prunedTxnCount := 0
 	for id, meta := range m.transactions {
 		if meta.status != statusActive && int64(id) < lowWater {
 			delete(m.transactions, id)
+			prunedTxnCount++
 		}
 	}
 	m.mu.Unlock()
+
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("GC: Removed %d inactive transactions below low water mark", prunedTxnCount))
+	}
 
 	pruneKeys, err := m.collectPruneableKeys(lowWater)
 	if err != nil || len(pruneKeys) == 0 {
 		return
 	}
+
+	if m.tracer != nil {
+		m.tracer.Add(fmt.Sprintf("GC: Identified %d obsolete row versions to prune from physical storage", len(pruneKeys)))
+	}
+
 	for _, k := range pruneKeys {
 		_ = m.tableManager.Delete(k)
 	}
@@ -482,7 +600,7 @@ func (m *MVCCManager) collectPruneableKeys(lowWater int64) ([]schema.DeleteOpera
 				entry := raw.Entry()
 				userKey, writerID, ok := m.decodeKey(entry.Key)
 				if !ok {
-					panic(fmt.Sprintf("unexpected key format during GC: %s", string(entry.Key)))
+					continue
 				}
 
 				m.mu.RLock()
@@ -506,8 +624,6 @@ func (m *MVCCManager) collectPruneableKeys(lowWater int64) ([]schema.DeleteOpera
 			raw.Close()
 
 			for _, versions := range groupByUserKey {
-				// Versions are newest-first due to ^txnID encoding.
-				// Find the youngest committed version.
 				youngestCommitted := -1
 				for i, v := range versions {
 					if v.status == statusCommitted {
@@ -519,15 +635,12 @@ func (m *MVCCManager) collectPruneableKeys(lowWater int64) ([]schema.DeleteOpera
 					continue
 				}
 
-				// Everything older and below the low-water mark can be pruned.
 				for i := youngestCommitted + 1; i < len(versions); i++ {
 					if versions[i].txnID < lowWater {
 						toDelete = append(toDelete, versions[i].internalKey)
 					}
 				}
 
-				// Aborted versions above the youngest committed can also be
-				// pruned if they are below the low-water mark.
 				for i := 0; i < youngestCommitted; i++ {
 					v := versions[i]
 					if v.status == statusAborted && v.txnID < lowWater {
@@ -558,25 +671,23 @@ func (m *MVCCManager) computeMinActive() int64 {
 	return min
 }
 
-func (m *MVCCManager) encodeKey(key []byte, ts uint64) []byte {
-	buf := make([]byte, len(key)+8)
-	copy(buf, key)
-	binary.BigEndian.PutUint64(buf[len(key):], math.MaxUint64-ts)
+func (m *MVCCManager) encodeKey(userKey []byte, txnID uint64) []byte {
+	buf := make([]byte, len(userKey)+1+8)
+	copy(buf, userKey)
+	buf[len(userKey)] = 0x00 // separator
+	flipped := ^txnID        // bit-flip → descending order
+	binary.BigEndian.PutUint64(buf[len(userKey)+1:], flipped)
 	return buf
 }
+
 func (m *MVCCManager) decodeKey(fullKey []byte) ([]byte, uint64, bool) {
-	if len(fullKey) < 8 {
+	if len(fullKey) < 9 {
 		return nil, 0, false
 	}
 
-	// Extract the user-facing key (everything before the last 8 bytes)
-	userKey := fullKey[:len(fullKey)-8]
+	userKey := fullKey[:len(fullKey)-9] // remove separator + txn
+	inverted := binary.BigEndian.Uint64(fullKey[len(fullKey)-8:])
+	txnID := ^inverted
 
-	// Read the inverted timestamp
-	invertedTs := binary.BigEndian.Uint64(fullKey[len(fullKey)-8:])
-
-	// Undo the inversion to get the original Transaction ID
-	ts := math.MaxUint64 - invertedTs
-
-	return userKey, ts, true
+	return userKey, txnID, true
 }

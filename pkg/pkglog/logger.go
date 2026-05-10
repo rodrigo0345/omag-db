@@ -1,4 +1,4 @@
-package log
+package pkglog
 
 import (
 	"fmt"
@@ -79,7 +79,7 @@ func Warn(format string, args ...interface{}) {
 	if !shouldLog(LevelWarn) {
 		return
 	}
-  	fmt.Fprintf(os.Stderr, "[WARN] "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "[WARN] "+format+"\n", args...)
 }
 
 func Error(format string, args ...interface{}) {
